@@ -1,7 +1,7 @@
 #import "@local/kiwi:0.0.0": *
 #show: page
 
-= Kiwi design document and notes
+= Kiwi design document and notes <design>
 
 == Level one headings
 

@@ -1,4 +1,7 @@
-== Todos <todo>
+#import "@local/kiwi:0.0.0": *
+#show: page
+
+= Todos <todo>
 
 Foobar
 

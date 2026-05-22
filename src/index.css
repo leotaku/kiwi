@@ -1,0 +1,27 @@
+h1 {
+  font-size: 1rem;
+  margin-block: 0;
+}
+
+h2, h3, h4, h5, h6 {
+  font-size: 1rem;
+}
+
+footer {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  text-align: center;
+}
+ul {
+  margin-block-start: 8px;
+  margin-block-end: 8px;
+}
+section {
+  margin-block-start: 16px;
+  margin-block-end: 16px;
+}
+
+:root {
+  color-scheme: light dark;
+}

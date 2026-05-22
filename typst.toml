@@ -1,0 +1,12 @@
+[package]
+name = "kiwi"
+version = "0.0.0"
+entrypoint = "src/lib.typ"
+authors = ["Leo Gaskin <leo.gaskin@le0.gs>"]
+license = "MIT"
+description = "A wiki preset/template."
+repository = "https://github.com/leotaku/kiwi"
+compiler = "0.14.2"
+categories = []
+keywords = []
+exclude = []

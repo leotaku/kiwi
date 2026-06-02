@@ -1,12 +1,16 @@
+mod typst_routines;
 mod typst_world;
 
 use std::sync::Arc;
 
-use axum::{Router, response::Html, routing::get};
 use clap::Parser;
-use typst::syntax::VirtualPath;
-use typst_kit::files::FsRoot;
-use typst_world::{TypstWorld, TypstWorldContext};
+use typst::{Library, LibraryExt, syntax::VirtualPath};
+use typst_kit::{
+    diagnostics::{DiagnosticFormat, termcolor::StandardStream},
+    files::FsRoot,
+};
+use typst_utils::LazyHash;
+use typst_world::{GlobalContext, TemporaryWorld};
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -29,17 +33,34 @@ struct Command {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Command::parse();
 
-    let entries: Vec<_> = WalkDir::new(args.directory)
+    let context = Arc::new(GlobalContext::new(FsRoot::new(args.directory.clone())));
+
+    let paths = WalkDir::new(&args.directory)
         .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().ends_with(".typ") && e.metadata().is_ok_and(|m| m.is_file()))
-        .collect();
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.path().extension().map_or(false, |ext| ext == "typ")
+                && entry.metadata().is_ok_and(|m| m.is_file())
+        })
+        .filter_map(|entry| VirtualPath::virtualize(&args.directory, entry.path()).ok());
 
-    let app = Router::new();
+    let (labels, diagnostics) = typst_routines::collect_labels(&context, paths);
+    let mut stream = StandardStream::stderr(Default::default());
 
-    let addr: std::net::SocketAddr = (args.addr, args.port).into();
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    let world = TemporaryWorld {
+        main: &VirtualPath::new(".").expect("this to be a valid path"),
+        context: &context,
+        library: &LazyHash::new(Library::default()),
+    };
+
+    typst_kit::diagnostics::emit(
+        &mut stream,
+        &world,
+        diagnostics.iter(),
+        DiagnosticFormat::Human,
+    )?;
+
+    println!("{:?}", labels);
 
     Ok(())
 }

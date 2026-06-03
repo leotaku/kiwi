@@ -1620,6 +1620,7 @@ dependencies = [
  "http",
  "notify",
  "reqwest",
+ "rustc-hash",
  "tokio",
  "typst",
  "typst-html",

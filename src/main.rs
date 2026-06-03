@@ -32,20 +32,21 @@ struct Command {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Command::parse();
+    let mut stream = StandardStream::stderr(Default::default());
 
     let context = Arc::new(GlobalContext::new(FsRoot::new(args.directory.clone())));
 
-    let paths = WalkDir::new(&args.directory)
+    let paths: Vec<_> = WalkDir::new(&args.directory)
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             entry.path().extension().map_or(false, |ext| ext == "typ")
                 && entry.metadata().is_ok_and(|m| m.is_file())
         })
-        .filter_map(|entry| VirtualPath::virtualize(&args.directory, entry.path()).ok());
+        .filter_map(|entry| VirtualPath::virtualize(&args.directory, entry.path()).ok())
+        .collect();
 
-    let (labels, diagnostics) = typst_routines::collect_labels(&context, paths);
-    let mut stream = StandardStream::stderr(Default::default());
+    let (labeled_content, errors) = typst_routines::collect_labels(&context, paths.clone());
 
     let world = TemporaryWorld {
         main: &VirtualPath::new(".").expect("this to be a valid path"),
@@ -53,14 +54,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         library: &LazyHash::new(Library::default()),
     };
 
+    typst_kit::diagnostics::emit(&mut stream, &world, errors.iter(), DiagnosticFormat::Human)?;
+
+    let (resulting_files, mut diagnostics) =
+        typst_routines::render_wiki(labeled_content, &context, paths);
+
+    for (path, document) in resulting_files {
+        let out_path = path.with_extension("html").realize(&args.directory);
+        match typst_html::html(&document) {
+            Ok(text) => std::fs::write(out_path, text)?,
+            Err(errs) => diagnostics.extend(errs),
+        }
+    }
+
     typst_kit::diagnostics::emit(
         &mut stream,
         &world,
-        diagnostics.iter(),
+        diagnostics.iter().filter(|diag| {
+            diag.message != "html export is under active development and incomplete"
+        }),
         DiagnosticFormat::Human,
     )?;
-
-    println!("{:?}", labels);
 
     Ok(())
 }

@@ -10,9 +10,11 @@ clap = { version = "4.6.1", features = ["derive"] }
 http = "1.4.1"
 notify = "8.2.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
-time = { version = "0.3.47", features = ["local-offset"] }
 tokio = { version = "1.52.3", features = ["macros", "net", "rt", "rt-multi-thread"] }
 typst = { git = "https://github.com/typst/typst.git" }
 typst-html = { git = "https://github.com/typst/typst.git" }
-typst-kit = { git = "https://github.com/typst/typst.git", features = ["system-files", "universe-packages", "embedded-fonts", "scan-fonts", "emit-diagnostics"] }
+typst-kit = { git = "https://github.com/typst/typst.git", features = ["system-files", "universe-packages", "embedded-fonts", "scan-fonts", "emit-diagnostics", "datetime"] }
+typst-macros = { git = "https://github.com/typst/typst.git" }
+typst-library = { git = "https://github.com/typst/typst.git" }
+typst-utils = { git = "https://github.com/typst/typst.git" }
 walkdir = "2.5.0"

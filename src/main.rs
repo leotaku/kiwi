@@ -51,9 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TODO: shortcut if there are errors
     let wiki = typst_routines::render_wiki(wiki, &context);
 
-    for page in wiki.pages() {
-        let out_path = page.path.with_extension("html").realize(&args.directory);
-        match typst_html::html(&page.document) {
+    for (path, document) in wiki.pages() {
+        let out_path = path.with_extension("html").realize(&args.directory);
+        match typst_html::html(document) {
             Ok(text) => std::fs::write(out_path, text)?,
             Err(errs) => todo!(),
         }

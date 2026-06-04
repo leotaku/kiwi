@@ -3,9 +3,7 @@
 
 = Todos <todo>
 
-Foobar
-
-@design
+A #link(<design>)[link] to an external document.
 
 // + #todo[Read n pages]
 // + #todo[PlantsPLP implementation]

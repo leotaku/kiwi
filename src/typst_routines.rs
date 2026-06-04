@@ -23,7 +23,7 @@ use crate::typst_world::{GlobalContext, TemporaryWorld};
 
 #[typst_macros::elem(scope)]
 #[derive(Clone, Debug, PartialEq, Hash)]
-pub struct ExtRefElem {
+struct ExtRefElem {
     #[required]
     element: Content,
     #[required]
@@ -65,10 +65,10 @@ impl Repr for ExtRefElem {
 
 #[typst_macros::ty]
 #[derive(Clone, Debug, PartialEq)]
-pub struct Page {
-    pub path: VirtualPath,
-    pub anchors: FxHashMap<Location, EcoString>,
-    pub document: ManuallyHash<typst_html::HtmlDocument>,
+struct Page {
+    path: VirtualPath,
+    anchors: FxHashMap<Location, EcoString>,
+    document: ManuallyHash<typst_html::HtmlDocument>,
 }
 
 impl Repr for Page {
@@ -91,7 +91,7 @@ enum WikiEntry {
     Error(EcoVec<SourceDiagnostic>),
 }
 
-#[typst_macros::ty]
+#[typst_macros::ty(scope)]
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct Wiki(Vec<Warned<WikiEntry>>);
 
@@ -104,9 +104,11 @@ impl Wiki {
         Self(entries.collect())
     }
 
-    pub fn pages<'a>(&'a self) -> impl Iterator<Item = &'a Page> {
+    pub fn pages<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = (&'a VirtualPath, &'a typst_html::HtmlDocument)> {
         self.0.iter().filter_map(|entry| match entry.output {
-            WikiEntry::Rendered(ref page) => Some(page.as_ref()),
+            WikiEntry::Rendered(ref page) => Some((&page.path, &*page.document)),
             _ => None,
         })
     }
@@ -131,15 +133,19 @@ impl Wiki {
             agg || matches!(entry.output, WikiEntry::Empty(_))
         })
     }
+}
 
-    fn query(&self, selector: &Selector) -> EcoVec<ExtRefElem> {
-        let mut results = EcoVec::new();
+#[typst_macros::scope]
+impl Wiki {
+    #[func]
+    fn query(&self, selector: Selector) -> Vec<ExtRefElem> {
+        let mut results = Vec::new();
         for entry in self.0.iter() {
             if let WikiEntry::Rendered(ref page) = entry.output {
                 results.extend(
                     page.document
                         .introspector()
-                        .query(selector)
+                        .query(&selector)
                         .into_iter()
                         .map(|element| ExtRefElem {
                             element,
@@ -149,6 +155,38 @@ impl Wiki {
             }
         }
         results
+    }
+
+    #[func]
+    fn query_label(
+        &self,
+        engine: &mut Engine,
+        label: Label,
+    ) -> Result<Value, EcoVec<SourceDiagnostic>> {
+        let wiki = get_wiki(engine);
+        let mut queried = wiki.query(Selector::Label(label));
+        match queried.pop() {
+            None => {
+                let error = SourceDiagnostic::error(
+                    Span::detached(),
+                    eco_format!("label `<{}>` does not exist in the wiki", label.resolve()),
+                );
+                if wiki.is_incomplete() {
+                    engine.sink.warn(error);
+                    Ok(Value::None)
+                } else {
+                    Err(eco_vec![error])
+                }
+            }
+            Some(_) if queried.len() > 0 => Err(eco_vec![SourceDiagnostic::error(
+                Span::detached(),
+                eco_format!(
+                    "label `<{}>` occurs multiple times in the wiki",
+                    label.resolve()
+                )
+            )]),
+            Some(ext_ref) => Ok(ext_ref.into_value()),
+        }
     }
 }
 
@@ -191,23 +229,21 @@ fn resolve_refs_externally(
     }
 
     let wiki = get_wiki(engine);
-    let mut queried = wiki.query(&Selector::Label(packed.target));
+    let mut queried = wiki.query(Selector::Label(packed.target));
     match queried.pop() {
         None => {
+            let error = SourceDiagnostic::error(
+                packed.span(),
+                eco_format!(
+                    "label `<{}>` does not exist in the wiki",
+                    packed.target.into_inner().resolve()
+                ),
+            );
             if wiki.is_incomplete() {
-                engine.sink.warn(SourceDiagnostic::error(
-                    packed.span(),
-                    "unresolved wiki links",
-                ));
+                engine.sink.warn(error);
                 Ok(Value::None)
             } else {
-                Err(eco_vec![SourceDiagnostic::error(
-                    packed.span(),
-                    eco_format!(
-                        "label `<{}>` does not exist in the wiki",
-                        packed.target.into_inner().resolve()
-                    )
-                )])
+                Err(eco_vec![error])
             }
         }
         Some(_) if queried.len() > 0 => Err(eco_vec![SourceDiagnostic::error(

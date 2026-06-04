@@ -1,5 +1,6 @@
 #let page(body) = {
     let h = html
+    let wiki = sys.inputs.x-wiki
 
     let title = state("kiwi-page-title", none)
     show heading.where(level: 1): it => {
@@ -13,12 +14,22 @@
         h.elem("h" + str(it.level), it.body)
     }
 
-    show metadata: it => {
-        if type(it.value) != ext-ref {
+    show ext-ref: it => {
+        h.a(href: it.html-link(), it.element.body)
+    }
+    show link: it => {
+        if type(it.dest) != label {
             return it
         }
 
-        [Yay!]
+        let queried = wiki.query-label(it.dest)
+        if queried == none {
+            [UNRESOLVED]
+        } else if queried.func() == ext-ref {
+            h.a(href: queried.html-link(), it.body)
+        } else {
+            it
+        }
     }
 
     h.html[

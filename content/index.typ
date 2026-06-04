@@ -4,5 +4,3 @@
 = Posts
 
 - @design
-
-#eval(backlinks("design.typ"))

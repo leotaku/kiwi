@@ -48,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_map(|entry| VirtualPath::virtualize(&args.directory, entry.path()).ok());
 
     let wiki = typst_routines::render_wiki(Wiki::from_paths(paths), &context);
+    // TODO: shortcut if there are errors
     let wiki = typst_routines::render_wiki(wiki, &context);
 
     for page in wiki.pages() {

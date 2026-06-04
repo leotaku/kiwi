@@ -21,13 +21,49 @@ use typst_macros::func;
 
 use crate::typst_world::{GlobalContext, TemporaryWorld};
 
-#[typst_macros::ty]
+#[typst_macros::elem(scope)]
 #[derive(Clone, Debug, PartialEq, Hash)]
-pub struct ExtRef {
+pub struct ExtRefElem {
+    #[required]
     element: Content,
+    #[required]
     page: Arc<Page>,
 }
 
+typst_macros::cast! {
+   ExtRefElem,
+   v: Content => v.unpack::<Self>().map_err(|_| "expected an ext-ref element")?,
+}
+
+#[typst_macros::scope]
+impl ExtRefElem {
+    #[func]
+    fn html_link(&self, engine: &Engine) -> Str {
+        let output_path = self.page.path.with_extension("html");
+
+        let relative_path = engine.world.main().vpath().parent().map_or_else(
+            || output_path.get_without_slash().into(),
+            |parent| output_path.relative_from(&parent),
+        );
+
+        let target_link = self
+            .element
+            .location()
+            .and_then(|loc| self.page.anchors.get(&loc))
+            .map(|id| eco_format!("{}#{}", relative_path, id))
+            .unwrap_or_else(|| relative_path);
+
+        target_link.into()
+    }
+}
+
+impl Repr for ExtRefElem {
+    fn repr(&self) -> typst::ecow::EcoString {
+        "ext-ref".into()
+    }
+}
+
+#[typst_macros::ty]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
     pub path: VirtualPath,
@@ -35,9 +71,9 @@ pub struct Page {
     pub document: ManuallyHash<typst_html::HtmlDocument>,
 }
 
-impl Repr for ExtRef {
+impl Repr for Page {
     fn repr(&self) -> typst::ecow::EcoString {
-        "ext-ref".into()
+        "page".into()
     }
 }
 
@@ -58,12 +94,6 @@ enum WikiEntry {
 #[typst_macros::ty]
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct Wiki(Vec<Warned<WikiEntry>>);
-
-impl Repr for Wiki {
-    fn repr(&self) -> typst::ecow::EcoString {
-        "external".into()
-    }
-}
 
 impl Wiki {
     pub fn from_paths(paths: impl IntoIterator<Item = VirtualPath>) -> Self {
@@ -102,7 +132,7 @@ impl Wiki {
         })
     }
 
-    fn query(&self, selector: &Selector) -> EcoVec<ExtRef> {
+    fn query(&self, selector: &Selector) -> EcoVec<ExtRefElem> {
         let mut results = EcoVec::new();
         for entry in self.0.iter() {
             if let WikiEntry::Rendered(ref page) = entry.output {
@@ -111,7 +141,7 @@ impl Wiki {
                         .introspector()
                         .query(selector)
                         .into_iter()
-                        .map(|element| ExtRef {
+                        .map(|element| ExtRefElem {
                             element,
                             page: page.clone(),
                         }),
@@ -122,33 +152,9 @@ impl Wiki {
     }
 }
 
-#[typst_macros::scope]
-impl Wiki {
-    #[func]
-    fn query_link(&self, engine: &Engine, label: Label) -> Result<Str, EcoVec<SourceDiagnostic>> {
-        let mut inter_doc_labeled = self.query_by_ref(&Selector::Label(label));
-        let (target_page, target_content) = match inter_doc_labeled.pop() {
-            None => {
-                return Err(eco_vec![SourceDiagnostic::error(Span::detached(), ":(")]);
-            }
-            Some(_) if inter_doc_labeled.len() > 0 => {
-                return Err(eco_vec![SourceDiagnostic::error(Span::detached(), ":(")]);
-            }
-            Some(queried) => queried,
-        };
-
-        let relative_path = engine.world.main().vpath().parent().map_or_else(
-            || target_page.path.get_without_slash().into(),
-            |parent| target_page.path.relative_from(&parent),
-        );
-
-        let target_link = target_content
-            .location()
-            .and_then(|loc| target_page.anchors.get(&loc))
-            .map(|id| eco_format!("{}#{}", relative_path, id))
-            .unwrap_or_else(|| relative_path);
-
-        Ok(target_link.into())
+impl Repr for Wiki {
+    fn repr(&self) -> typst::ecow::EcoString {
+        "wiki".into()
     }
 }
 
@@ -211,7 +217,7 @@ fn resolve_refs_externally(
                 packed.target.into_inner().resolve()
             )
         )]),
-        Some(ext_ref) => Ok(MetadataElem::new(ext_ref.into_value()).into_value()),
+        Some(ext_ref) => Ok(ext_ref.into_value()),
     }
 }
 
@@ -239,7 +245,7 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
         Span::detached(),
     )));
     let global = library.global.scope_mut();
-    global.define_type::<ExtRef>();
+    global.define_elem::<ExtRefElem>();
     let library = LazyHash::new(library);
 
     for path in paths {

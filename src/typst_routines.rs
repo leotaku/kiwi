@@ -1,65 +1,70 @@
+use std::sync::Arc;
+
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use typst::{
-    Features, Library, LibraryExt as _,
+    Features, Library, LibraryExt as _, World,
     diag::{SourceDiagnostic, Warned},
     ecow::{EcoString, EcoVec, eco_format, eco_vec},
     engine::Engine,
     foundations::{
-        Arg, Args, Content, Dynamic, Element, IntoValue, NativeElement, NativeFunc as _, Packed,
-        Recipe, Repr, Selector, Style, Transformation, Value,
+        Arg, Args, Array, Content, Dict, Dynamic, Element, IntoValue, Label, NativeElement,
+        NativeFunc as _, Packed, Recipe, Repr, Selector, Str, Style, Transformation, Value,
     },
-    introspection::{Introspector as _, Location, QueryIntrospection},
+    introspection::{Introspector as _, Location, MetadataElem, QueryIntrospection},
     model::RefElem,
-    syntax::{Span, Spanned, VirtualPath},
+    syntax::{RootedPath, Span, Spanned, VirtualPath},
     text::TextElem,
     utils::{LazyHash, ManuallyHash, hash128},
 };
 use typst_html::{HtmlAttr, HtmlElem, HtmlTag};
+use typst_macros::func;
 
 use crate::typst_world::{GlobalContext, TemporaryWorld};
 
-#[derive(Clone, Debug, PartialEq)]
-struct Page {
-    anchors: FxHashMap<Location, EcoString>,
-    document: ManuallyHash<typst_html::HtmlDocument>,
+#[typst_macros::ty]
+#[derive(Clone, Debug, PartialEq, Hash)]
+pub struct ExtRef {
+    location: Location,
+    page: Arc<Page>,
 }
-
-#[typst_macros::elem]
-pub struct ExtRefElem {}
 
 #[typst_macros::ty]
 #[derive(Clone, Debug, PartialEq)]
-pub struct Wiki(FxHashMap<VirtualPath, Page>);
+pub struct Page {
+    pub path: VirtualPath,
+    pub anchors: FxHashMap<Location, EcoString>,
+    pub document: ManuallyHash<typst_html::HtmlDocument>,
+}
 
-impl std::hash::Hash for Wiki {
+impl Repr for ExtRef {
+    fn repr(&self) -> typst::ecow::EcoString {
+        "extref".into()
+    }
+}
+
+impl Repr for Page {
+    fn repr(&self) -> typst::ecow::EcoString {
+        "page".into()
+    }
+}
+
+impl std::hash::Hash for Page {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        for (path, page) in self.0.iter() {
-            path.hash(state);
-            page.document.root().hash(state);
-        }
+        self.path.hash(state);
+        self.document.hash(state);
     }
 }
 
-impl Wiki {
-    fn empty() -> Self {
-        Self(FxHashMap::with_hasher(FxBuildHasher))
-    }
-
-    fn query(&self, selector: &Selector) -> EcoVec<(VirtualPath, Content)> {
-        let mut results = EcoVec::new();
-        for (path, page) in self.0.iter() {
-            results.extend(
-                page.document
-                    .introspector()
-                    .query(selector)
-                    .into_iter()
-                    .map(|content| (path.clone(), content)),
-            )
-        }
-
-        results
-    }
+#[derive(Clone, Debug, PartialEq, Hash)]
+enum WikiEntry {
+    Empty(VirtualPath),
+    Rendered(Page),
+    Error(EcoVec<SourceDiagnostic>),
 }
+
+#[typst_macros::ty(scope)]
+#[derive(Clone, Debug, PartialEq, Hash)]
+pub struct Wiki(Vec<Warned<WikiEntry>>);
 
 impl Repr for Wiki {
     fn repr(&self) -> typst::ecow::EcoString {
@@ -67,17 +72,102 @@ impl Repr for Wiki {
     }
 }
 
-#[typst_macros::func]
-fn ignore_refs(_body: Content) -> Result<Value, typst::ecow::EcoVec<SourceDiagnostic>> {
-    Ok(Value::None)
+impl Wiki {
+    pub fn from_paths(paths: impl IntoIterator<Item = VirtualPath>) -> Self {
+        let entries = paths.into_iter().map(|path| Warned {
+            output: WikiEntry::Empty(path),
+            warnings: EcoVec::new(),
+        });
+        Self(entries.collect())
+    }
+
+    pub fn pages<'a>(&'a self) -> impl Iterator<Item = &'a Page> {
+        self.0.iter().filter_map(|entry| match entry.output {
+            WikiEntry::Rendered(ref page) => Some(page),
+            _ => None,
+        })
+    }
+
+    pub fn diagnostics<'a>(&'a self) -> impl Iterator<Item = &'a SourceDiagnostic> {
+        fn errors<'a>(entry: &'a WikiEntry) -> impl Iterator<Item = &'a SourceDiagnostic> {
+            match entry {
+                WikiEntry::Error(errors) => Some(errors.iter()).into_iter(),
+                _ => None.into_iter(),
+            }
+            .flatten()
+        }
+
+        self.0
+            .iter()
+            .filter_map(|entry| Some(entry.warnings.iter().chain(errors(&entry.output))))
+            .flatten()
+    }
+
+    fn query_by_ref<'a>(&'a self, selector: &Selector) -> EcoVec<(&'a Page, Content)> {
+        let mut results = EcoVec::new();
+        for entry in self.0.iter() {
+            if let WikiEntry::Rendered(ref page) = entry.output {
+                results.extend(
+                    page.document
+                        .introspector()
+                        .query(selector)
+                        .into_iter()
+                        .map(|content| (page, content)),
+                )
+            }
+        }
+        results
+    }
+}
+
+#[typst_macros::scope]
+impl Wiki {
+    #[func]
+    fn query_link(&self, engine: &Engine, label: Label) -> Result<Str, EcoVec<SourceDiagnostic>> {
+        let mut inter_doc_labeled = self.query_by_ref(&Selector::Label(label));
+        let (target_page, target_content) = match inter_doc_labeled.pop() {
+            None => {
+                return Err(eco_vec![SourceDiagnostic::error(Span::detached(), ":(")]);
+            }
+            Some(_) if inter_doc_labeled.len() > 0 => {
+                return Err(eco_vec![SourceDiagnostic::error(Span::detached(), ":(")]);
+            }
+            Some(queried) => queried,
+        };
+
+        let relative_path = engine.world.main().vpath().parent().map_or_else(
+            || target_page.path.get_without_slash().into(),
+            |parent| target_page.path.relative_from(&parent),
+        );
+
+        let target_link = target_content
+            .location()
+            .and_then(|loc| target_page.anchors.get(&loc))
+            .map(|id| eco_format!("{}#{}", relative_path, id))
+            .unwrap_or_else(|| relative_path);
+
+        Ok(target_link.into())
+    }
+}
+
+fn get_wiki<'a>(engine: &'a Engine) -> &'a Wiki {
+    let sys = engine.library.global.scope().get("sys").unwrap().read();
+    let Value::Module(sys) = sys else {
+        unreachable!()
+    };
+    let Value::Dict(dict) = sys.scope().get("inputs").unwrap().read() else {
+        unreachable!()
+    };
+    let Value::Dyn(wiki) = dict.get("x-wiki").unwrap() else {
+        unreachable!()
+    };
+
+    wiki.downcast().unwrap()
 }
 
 #[typst_macros::func]
 fn resolve_refs_externally(
     engine: &mut Engine,
-    #[named]
-    #[default(Wiki::empty())]
-    wiki: Wiki,
     body: Content,
 ) -> Result<Value, typst::ecow::EcoVec<SourceDiagnostic>> {
     let packed = match Packed::<RefElem>::from_owned(body) {
@@ -92,107 +182,37 @@ fn resolve_refs_externally(
         return Ok(packed.pack().into_value());
     }
 
-    // TODO: ExtRefElem
+    let wiki = get_wiki(engine);
+    let ext_ref = wiki.query_unique(engine, packed.target)?;
 
-    let mut inter_doc_labeled = wiki.query(&Selector::Label(packed.target));
-    let (target_path, target_content) = match inter_doc_labeled.pop() {
-        None => {
-            return Err(eco_vec![SourceDiagnostic::error(packed.span(), ":(")]);
-        }
-        Some(_) if inter_doc_labeled.len() > 0 => {
-            return Err(eco_vec![SourceDiagnostic::error(packed.span(), ":(")]);
-        }
-        Some(queried) => queried,
-    };
-    let target_page = &wiki.0[&target_path];
-
-    let target_link = target_content
-        .location()
-        .and_then(|loc| target_page.anchors.get(&loc))
-        .map(|id| eco_format!("{}#{}", target_path.get_with_slash(), id))
-        .unwrap_or_else(|| target_path.into_with_slash());
-
-    Ok(HtmlElem::new(HtmlTag::constant("a"))
-        .with_attr(HtmlAttr::constant("href"), target_link)
-        .with_body(Some(TextElem::packed("TODO")))
-        .pack()
-        .into_value())
+    Ok(MetadataElem::new(ext_ref.into_value()).into_value())
 }
 
-pub fn collect_labels(
-    context: &GlobalContext,
-    paths: impl IntoIterator<Item = VirtualPath>,
-) -> (Wiki, EcoVec<SourceDiagnostic>) {
-    let mut pages = FxHashMap::with_hasher(FxBuildHasher);
-    let mut errors = EcoVec::new();
-
-    let mut library = Library::builder().with_features(Features::all()).build();
-    library.styles.push(Style::Recipe(Recipe::new(
-        Some(Selector::Elem(Element::of::<RefElem>(), Default::default())),
-        Transformation::Func(ignore_refs::func()),
-        Span::detached(),
-    )));
-    let library = LazyHash::new(library);
-
-    for path in paths {
-        let world = TemporaryWorld {
-            main: &path,
-            library: &library,
-            context,
-        };
-
-        // TODO: generate IDs with AnchorGenerator
-
-        match typst::compile::<typst_html::HtmlDocument>(&world).output {
-            Ok(mut document) => {
-                let targets = document
-                    .introspector()
-                    .query_labelled()
-                    .into_iter()
-                    .filter_map(|content| content.location())
-                    .collect();
-                let anchors = typst_html::create_link_anchors(&mut document, &targets);
-
-                let hash = hash128(document.root());
-                pages.insert(
-                    path.with_extension("html"),
-                    Page {
-                        anchors,
-                        document: ManuallyHash::new(document, hash),
-                    },
-                );
-            }
-            Err(errs) => errors.extend(errs),
-        };
+pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
+    let mut entries = Vec::new();
+    let mut paths = Vec::new();
+    for entry in wiki.0.iter() {
+        match entry.output {
+            WikiEntry::Empty(ref path) => paths.push(path.clone()),
+            WikiEntry::Rendered(ref page) => paths.push(page.path.clone()),
+            _ => entries.push(entry.clone()),
+        }
     }
 
-    (Wiki(pages), errors)
-}
+    let mut inputs = Dict::new();
+    inputs.insert("x-wiki".into(), wiki.into_value());
 
-pub fn render_wiki(
-    wiki: Wiki,
-    context: &GlobalContext,
-    paths: impl IntoIterator<Item = VirtualPath>,
-) -> (
-    FxHashMap<VirtualPath, typst_html::HtmlDocument>,
-    EcoVec<SourceDiagnostic>,
-) {
-    let mut output = FxHashMap::with_hasher(FxBuildHasher);
-    let mut diagnostics = EcoVec::new();
-
-    let mut library = Library::builder().with_features(Features::all()).build();
+    let mut library = Library::builder()
+        .with_features(Features::all())
+        .with_inputs(inputs)
+        .build();
     library.styles.push(Style::Recipe(Recipe::new(
         Some(Selector::Elem(Element::of::<RefElem>(), Default::default())),
-        Transformation::Func(resolve_refs_externally::func().with(&mut Args {
-            span: Span::detached(),
-            items: eco_vec![Arg {
-                span: Span::detached(),
-                name: Some("wiki".into()),
-                value: Spanned::detached(Value::Dyn(Dynamic::new(wiki))),
-            }],
-        })),
+        Transformation::Func(resolve_refs_externally::func()),
         Span::detached(),
     )));
+    let global = library.global.scope_mut();
+    global.define_type::<ExtRef>();
     let library = LazyHash::new(library);
 
     for path in paths {
@@ -207,27 +227,35 @@ pub fn render_wiki(
                 output: Ok(mut document),
                 warnings,
             } => {
-                diagnostics.extend(warnings);
-
                 let targets = document
                     .introspector()
                     .query_labelled()
                     .into_iter()
                     .filter_map(|content| content.location())
                     .collect();
-                typst_html::create_link_anchors(&mut document, &targets);
+                let anchors = typst_html::create_link_anchors(&mut document, &targets);
 
-                output.insert(path, document);
+                let hash = hash128(document.root());
+                entries.push(Warned {
+                    output: WikiEntry::Rendered(Page {
+                        path,
+                        anchors,
+                        document: ManuallyHash::new(document, hash),
+                    }),
+                    warnings,
+                });
             }
             Warned {
                 output: Err(errors),
                 warnings,
             } => {
-                diagnostics.extend(warnings);
-                diagnostics.extend(errors);
+                entries.push(Warned {
+                    output: WikiEntry::Error(errors),
+                    warnings,
+                });
             }
         };
     }
 
-    (output, diagnostics)
+    Wiki(entries)
 }

@@ -13,6 +13,8 @@ use typst_utils::LazyHash;
 use typst_world::{GlobalContext, TemporaryWorld};
 use walkdir::WalkDir;
 
+use crate::typst_routines::Wiki;
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(color=clap::ColorChoice::Never)]
@@ -36,41 +38,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let context = Arc::new(GlobalContext::new(FsRoot::new(args.directory.clone())));
 
-    let paths: Vec<_> = WalkDir::new(&args.directory)
+    let paths = WalkDir::new(&args.directory)
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             entry.path().extension().map_or(false, |ext| ext == "typ")
                 && entry.metadata().is_ok_and(|m| m.is_file())
         })
-        .filter_map(|entry| VirtualPath::virtualize(&args.directory, entry.path()).ok())
-        .collect();
+        .filter_map(|entry| VirtualPath::virtualize(&args.directory, entry.path()).ok());
 
-    let (labeled_content, errors) = typst_routines::collect_labels(&context, paths.clone());
+    let wiki = typst_routines::render_wiki(Wiki::from_paths(paths), &context);
+    let wiki = typst_routines::render_wiki(wiki, &context);
 
-    let world = TemporaryWorld {
+    for page in wiki.pages() {
+        let out_path = page.path.with_extension("html").realize(&args.directory);
+        match typst_html::html(&page.document) {
+            Ok(text) => std::fs::write(out_path, text)?,
+            Err(errs) => todo!(),
+        }
+    }
+
+    let diagnostic_world = TemporaryWorld {
         main: &VirtualPath::new(".").expect("this to be a valid path"),
         context: &context,
         library: &LazyHash::new(Library::default()),
     };
 
-    typst_kit::diagnostics::emit(&mut stream, &world, errors.iter(), DiagnosticFormat::Human)?;
-
-    let (resulting_files, mut diagnostics) =
-        typst_routines::render_wiki(labeled_content, &context, paths);
-
-    for (path, document) in resulting_files {
-        let out_path = path.with_extension("html").realize(&args.directory);
-        match typst_html::html(&document) {
-            Ok(text) => std::fs::write(out_path, text)?,
-            Err(errs) => diagnostics.extend(errs),
-        }
-    }
-
     typst_kit::diagnostics::emit(
         &mut stream,
-        &world,
-        diagnostics.iter().filter(|diag| {
+        &diagnostic_world,
+        wiki.diagnostics().filter(|diag| {
             diag.message != "html export is under active development and incomplete"
         }),
         DiagnosticFormat::Human,

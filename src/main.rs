@@ -3,12 +3,13 @@ mod typst_world;
 
 use std::sync::Arc;
 
+use axum::Router;
 use clap::Parser;
+use notify::Watcher;
+use tower_http::services::ServeDir;
+use tower_livereload::LiveReloadLayer;
 use typst::{Library, LibraryExt, syntax::VirtualPath};
-use typst_kit::{
-    diagnostics::{DiagnosticFormat, termcolor::StandardStream},
-    files::FsRoot,
-};
+use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 use typst_utils::LazyHash;
 use typst_world::{GlobalContext, TemporaryWorld};
 use walkdir::WalkDir;
@@ -34,25 +35,80 @@ struct Command {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Command::parse();
+    let context = GlobalContext::new(args.directory);
+
+    watch(context, (args.addr, args.port).into()).await
+}
+
+async fn watch(
+    context: Arc<GlobalContext>,
+    addr: std::net::SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let livereload = LiveReloadLayer::new();
+    let reloader = livereload.reloader();
+    let app = Router::new()
+        .fallback_service(ServeDir::new(context.directory()))
+        .layer(livereload);
+
+    let (send, mut recv) = tokio::sync::mpsc::channel(100);
+    let mut watcher = notify::recommended_watcher(move |event: Result<notify::Event, _>| {
+        if let Ok(evt) = event
+            && !evt.kind.is_access()
+        {
+            send.blocking_send(evt).ok();
+        }
+    })?;
+
+    compile(context.clone()).expect("todo");
+
+    let mut context = Arc::try_unwrap(context).unwrap_or_else(|_| todo!());
+
+    let (loader, deps) = context.files_mut().dependencies();
+    for file_id in deps {
+        println!("watch {:?}", file_id);
+        loader
+            .resolve(file_id)
+            .map(|path| watcher.watch(&path, notify::RecursiveMode::NonRecursive))
+            .ok();
+    }
+
+    eprintln!("listening on: http://{}/", addr);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    tokio::spawn(async {
+        axum::serve(listener, app).await.ok();
+    });
+
+    while let Some(event) = recv.recv().await {
+        println!("changed: {:?}", event.paths);
+        context.files_mut().reset();
+        let context_arc = Arc::new(context);
+        compile(context_arc.clone()).expect("todo");
+        reloader.reload();
+        context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| todo!());
+    }
+
+    Ok(())
+}
+
+fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = StandardStream::stderr(Default::default());
 
-    let context = Arc::new(GlobalContext::new(FsRoot::new(args.directory.clone())));
-
-    let paths = WalkDir::new(&args.directory)
+    let paths = WalkDir::new(context.directory())
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             entry.path().extension().map_or(false, |ext| ext == "typ")
                 && entry.metadata().is_ok_and(|m| m.is_file())
         })
-        .filter_map(|entry| VirtualPath::virtualize(&args.directory, entry.path()).ok());
+        .filter_map(|entry| VirtualPath::virtualize(context.directory(), entry.path()).ok());
 
     let wiki = typst_routines::render_wiki(Wiki::from_paths(paths), &context);
     // TODO: shortcut if there are errors
     let wiki = typst_routines::render_wiki(wiki, &context);
 
     for (path, document) in wiki.pages() {
-        let out_path = path.with_extension("html").realize(&args.directory);
+        let out_path = path.with_extension("html").realize(context.directory());
         match typst_html::html(document) {
             Ok(text) => std::fs::write(out_path, text)?,
             Err(errs) => todo!(),

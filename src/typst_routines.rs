@@ -1,25 +1,24 @@
 use std::sync::Arc;
 
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::FxHashMap;
 use typst::{
     Features, Library, LibraryExt as _, World,
     diag::{SourceDiagnostic, Warned},
     ecow::{EcoString, EcoVec, eco_format, eco_vec},
     engine::Engine,
     foundations::{
-        Arg, Args, Array, Content, Dict, Dynamic, Element, Fold, IntoValue, Label, NativeElement,
-        NativeFunc as _, Packed, Recipe, Repr, Selector, Str, Style, Transformation, Value,
+        Content, Dict, IntoValue, Label, Repr, Selector, Value,
     },
-    introspection::{Introspector as _, Location, MetadataElem, QueryIntrospection},
-    model::RefElem,
-    syntax::{RootedPath, Span, Spanned, VirtualPath},
-    text::TextElem,
+    introspection::{Introspector as _, Location, },
+    syntax::{Span, VirtualPath},
     utils::{LazyHash, ManuallyHash, hash128},
 };
-use typst_html::{HtmlAttr, HtmlElem, HtmlTag};
 use typst_macros::func;
 
 use crate::typst_world::{GlobalContext, TemporaryWorld};
+
+// TODO: EcoVec<Error> -> Error
+// TODO: Make better use of auto type-convert
 
 #[typst_macros::elem(scope)]
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -38,13 +37,8 @@ typst_macros::cast! {
 #[typst_macros::scope]
 impl ExtRefElem {
     #[func]
-    fn html_link(&self, engine: &Engine) -> Str {
-        let output_path = self.page.path.with_extension("html");
-
-        let relative_path = engine.world.main().vpath().parent().map_or_else(
-            || output_path.get_without_slash().into(),
-            |parent| output_path.relative_from(&parent),
-        );
+    fn html_link(&self, engine: &Engine) -> EcoString {
+        let relative_path = self.page.html_link(engine);
 
         let target_link = self
             .element
@@ -63,12 +57,25 @@ impl Repr for ExtRefElem {
     }
 }
 
-#[typst_macros::ty]
+#[typst_macros::ty(scope)]
 #[derive(Clone, Debug, PartialEq)]
 struct Page {
     path: VirtualPath,
     anchors: FxHashMap<Location, EcoString>,
     document: ManuallyHash<typst_html::HtmlDocument>,
+}
+
+#[typst_macros::scope]
+impl Page {
+    #[func]
+    fn html_link(&self, engine: &Engine) -> EcoString {
+        let output_path = self.path.with_extension("html");
+        let relative_path = engine.world.main().vpath().parent().map_or_else(
+            || output_path.get_without_slash().into(),
+            |parent| output_path.relative_from(&parent),
+        );
+        relative_path.into()
+    }
 }
 
 impl Repr for Page {
@@ -211,52 +218,6 @@ fn get_wiki<'a>(engine: &'a Engine) -> &'a Wiki {
     wiki.downcast().unwrap()
 }
 
-#[typst_macros::func]
-fn resolve_refs_externally(
-    engine: &mut Engine,
-    body: Content,
-) -> Result<Value, EcoVec<SourceDiagnostic>> {
-    let packed = match Packed::<RefElem>::from_owned(body) {
-        Ok(packed) => packed,
-        Err(content) => return Ok(content.into_value()),
-    };
-    let intra_doc_labeled = engine.introspect(QueryIntrospection(
-        Selector::Label(packed.target),
-        Span::detached(),
-    ));
-    if intra_doc_labeled.len() > 0 {
-        return Ok(packed.pack().into_value());
-    }
-
-    let wiki = get_wiki(engine);
-    let mut queried = wiki.query(Selector::Label(packed.target));
-    match queried.pop() {
-        None => {
-            let error = SourceDiagnostic::error(
-                packed.span(),
-                eco_format!(
-                    "label `<{}>` does not exist in the wiki",
-                    packed.target.into_inner().resolve()
-                ),
-            );
-            if wiki.is_incomplete() {
-                engine.sink.warn(error);
-                Ok(Value::None)
-            } else {
-                Err(eco_vec![error])
-            }
-        }
-        Some(_) if queried.len() > 0 => Err(eco_vec![SourceDiagnostic::error(
-            packed.span(),
-            eco_format!(
-                "label `<{}>` occurs multiple times in the wiki",
-                packed.target.into_inner().resolve()
-            )
-        )]),
-        Some(ext_ref) => Ok(ext_ref.into_value()),
-    }
-}
-
 pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
     let mut entries = Vec::new();
     let mut paths = Vec::new();
@@ -275,11 +236,6 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
         .with_features(Features::all())
         .with_inputs(inputs)
         .build();
-    library.styles.push(Style::Recipe(Recipe::new(
-        Some(Selector::Elem(Element::of::<RefElem>(), Default::default())),
-        Transformation::Func(resolve_refs_externally::func()),
-        Span::detached(),
-    )));
     let global = library.global.scope_mut();
     global.define_elem::<ExtRefElem>();
     let library = LazyHash::new(library);

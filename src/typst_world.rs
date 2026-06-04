@@ -1,4 +1,8 @@
-use std::io::Read;
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use bytes::Buf as _;
 use tokio::runtime::Handle;
@@ -51,28 +55,33 @@ pub struct TemporaryWorld<'main, 'context, 'library> {
 }
 
 pub struct GlobalContext {
+    root: PathBuf,
     fonts: FontStore,
     files: FileStore<SystemFiles>,
 }
 
 impl GlobalContext {
-    pub fn new(root: FsRoot) -> Self {
+    pub fn new(root: PathBuf) -> Arc<Self> {
         let mut fonts = FontStore::new();
         fonts.extend(typst_kit::fonts::embedded());
         fonts.extend(typst_kit::fonts::system());
 
         let files = FileStore::new(SystemFiles::new(
-            root,
+            FsRoot::new(root.clone()),
             SystemPackages::new(Downloader {
                 client: reqwest::Client::new(),
             }),
         ));
 
-        Self { fonts, files }
+        Arc::new(Self { root, fonts, files })
     }
 
-    pub fn bust_filesystem_cache(&mut self) {
-        self.files.reset();
+    pub fn directory(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn files_mut(&mut self) -> &mut FileStore<SystemFiles> {
+        &mut self.files
     }
 }
 

@@ -19,3 +19,5 @@ typst-library = { git = "https://github.com/typst/typst.git" }
 typst-utils = { git = "https://github.com/typst/typst.git" }
 walkdir = "2.5.0"
 rustc-hash = "2.1.2"
+tower-http = { version = "0.6.11", features = ["fs"] }
+tower-livereload = "0.10.3"

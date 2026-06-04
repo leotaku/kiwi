@@ -1,32 +1,56 @@
-#let page(body) = {
+#let page(body) = if "x-wiki" in sys.inputs {
     let h = html
     let wiki = sys.inputs.x-wiki
 
     let title = state("kiwi-page-title", none)
+    show heading: it => {
+        h.elem("h" + str(it.level), it.body)
+    }
     show heading.where(level: 1): it => {
-        if in-main() { title.update(it.body.text) }
+        title.update(it.body.text)
         it
     }
     set heading(numbering: (..it) => if it.pos().len() <= 1 {} else {
         numbering("1.",..it.pos().slice(1))
     })
-    show heading: it => {
-        h.elem("h" + str(it.level), it.body)
+
+    let html-link = ext-ref => {
+        let elem = ext-ref.element
+        let link = if elem.func() == heading and elem.level <= 1 {
+            ext-ref.page.html-link()
+        } else {
+            ext-ref.html-link()
+        }
+        link.replace(regex("/?index.html"), "/")
     }
 
-    show ext-ref: it => {
-        h.a(href: it.html-link(), it.element.body)
+    show ref: it => {
+        if query(it.target).len() > 0 {
+            return it
+        }
+
+        let queried = wiki.query-label(it.target)
+        if queried == none {
+            h.code([UNRESOLVED])
+        } else if queried.func() == ext-ref {
+            h.a(href: html-link(queried), queried.element.body)
+        } else {
+            it
+        }
     }
+
     show link: it => {
         if type(it.dest) != label {
+            return it
+        } else if query(it.dest).len() > 0 {
             return it
         }
 
         let queried = wiki.query-label(it.dest)
         if queried == none {
-            [UNRESOLVED]
+            h.code([UNRESOLVED])
         } else if queried.func() == ext-ref {
-            h.a(href: queried.html-link(), it.body)
+            h.a(href: html-link(queried), it.body)
         } else {
             it
         }
@@ -39,6 +63,9 @@
             #h.style(read("index.css"))
         ]
         #h.body[
+            #h.header[
+                #h.a(href: "/", style: "float: right; text-decoration: none")[«]
+            ]
             #h.main[
                 #body
             ]
@@ -50,4 +77,13 @@
             ]
         ]
     ]
+} else {
+    show ref: it => {
+        if query(it.target).len() > 0 { it }
+    }
+    show link: it => {
+        if type(it.dest) != label or query(it.dest).len() > 0 { it }
+    }
+
+    body
 }

@@ -5,12 +5,11 @@ use std::sync::Arc;
 
 use axum::Router;
 use clap::Parser;
-use notify::Watcher;
+use notify::{Event, EventKind, Watcher as _};
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
-use typst::{Library, LibraryExt as _, syntax::VirtualPath};
+use typst::{Library, LibraryExt as _, syntax::VirtualPath, utils::LazyHash};
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
-use typst_utils::LazyHash;
 use walkdir::WalkDir;
 
 use crate::{
@@ -53,10 +52,8 @@ async fn watch(
         .layer(livereload);
 
     let (send, mut recv) = tokio::sync::mpsc::channel(100);
-    send.send(notify::Event::new(notify::EventKind::Other))
-        .await
-        .ok();
-    let mut watcher = notify::recommended_watcher(move |event: Result<notify::Event, _>| {
+    send.send(Event::new(EventKind::Other)).await.ok();
+    let mut watcher = notify::recommended_watcher(move |event: Result<Event, _>| {
         if let Ok(evt) = event
             && !evt.kind.is_access()
         {
@@ -127,7 +124,7 @@ fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>
     }
 
     let diagnostic_world = TemporaryWorld {
-        main: &VirtualPath::new(".").expect("this to always be a valid path"),
+        main: &VirtualPath::new(".").unwrap_or_else(|_| unreachable!()),
         context: &context,
         library: &LazyHash::new(Library::default()),
     };

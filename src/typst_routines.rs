@@ -4,19 +4,16 @@ use rustc_hash::FxHashMap;
 use typst::{
     Features, Library, LibraryExt as _, World,
     diag::{SourceDiagnostic, Warned},
-    ecow::{EcoString, EcoVec, eco_format, eco_vec},
+    ecow::{EcoString, EcoVec, eco_format},
     engine::Engine,
     foundations::{Content, Dict, IntoValue, Label, Repr, Selector, Value},
     introspection::{Introspector as _, Location},
-    syntax::{Span, VirtualPath},
+    syntax::VirtualPath,
     utils::{LazyHash, ManuallyHash, hash128},
 };
 use typst_macros::func;
 
 use crate::typst_world::{GlobalContext, TemporaryWorld};
-
-// TODO: EcoVec<Error> -> Error
-// TODO: Make better use of auto type-convert
 
 #[typst_macros::elem(scope)]
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -46,7 +43,7 @@ impl ExtRefElem {
 }
 
 impl Repr for ExtRefElem {
-    fn repr(&self) -> typst::ecow::EcoString {
+    fn repr(&self) -> EcoString {
         "ext-ref".into()
     }
 }
@@ -72,7 +69,7 @@ impl Page {
 }
 
 impl Repr for Page {
-    fn repr(&self) -> typst::ecow::EcoString {
+    fn repr(&self) -> EcoString {
         "page".into()
     }
 }
@@ -155,41 +152,31 @@ impl Wiki {
     }
 
     #[func]
-    fn query_label(
-        &self,
-        engine: &mut Engine,
-        label: Label,
-    ) -> Result<Value, EcoVec<SourceDiagnostic>> {
+    fn query_label(&self, engine: &Engine, label: Label) -> Result<Value, EcoString> {
         let wiki = get_wiki(engine);
         let mut queried = wiki.query(Selector::Label(label));
         match queried.pop() {
             None => {
-                let error = SourceDiagnostic::error(
-                    Span::detached(),
-                    eco_format!("label `<{}>` does not exist in the wiki", label.resolve()),
-                );
                 if wiki.is_incomplete() {
-                    // engine.sink.warn(error);
                     Ok(Value::None)
                 } else {
-                    println!("DEBUG: test?");
-                    Err(eco_vec![error])
+                    Err(eco_format!(
+                        "label `<{}>` does not exist in the wiki",
+                        label.resolve()
+                    ))
                 }
             }
-            Some(_) if !queried.is_empty() => Err(eco_vec![SourceDiagnostic::error(
-                Span::detached(),
-                eco_format!(
-                    "label `<{}>` occurs multiple times in the wiki",
-                    label.resolve()
-                )
-            )]),
+            Some(_) if !queried.is_empty() => Err(eco_format!(
+                "label `<{}>` occurs multiple times in the wiki",
+                label.resolve()
+            )),
             Some(ext_ref) => Ok(ext_ref.into_value()),
         }
     }
 }
 
 impl Repr for Wiki {
-    fn repr(&self) -> typst::ecow::EcoString {
+    fn repr(&self) -> EcoString {
         "wiki".into()
     }
 }

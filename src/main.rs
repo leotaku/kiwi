@@ -11,10 +11,12 @@ use tower_livereload::LiveReloadLayer;
 use typst::{Library, LibraryExt as _, syntax::VirtualPath};
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 use typst_utils::LazyHash;
-use typst_world::{GlobalContext, TemporaryWorld};
 use walkdir::WalkDir;
 
-use crate::typst_routines::Wiki;
+use crate::{
+    typst_routines::Wiki,
+    typst_world::{GlobalContext, TemporaryWorld},
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -84,6 +86,8 @@ async fn watch(
                 .ok();
         }
         context.files_mut().reset();
+
+        while let Ok(_) = recv.try_recv() {}
     }
 
     Ok(())

@@ -8,6 +8,7 @@ use clap::Parser;
 use notify::{Event, EventKind, Watcher as _};
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
+use tracing::{info, trace};
 use typst::{Library, LibraryExt as _, syntax::VirtualPath, utils::LazyHash};
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 use walkdir::WalkDir;
@@ -20,7 +21,21 @@ use crate::{
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(color=clap::ColorChoice::Never)]
-struct Command {
+enum Command {
+    Compile(#[command(flatten)] Compile),
+    Watch(#[command(flatten)] Watch),
+}
+
+#[derive(Parser)]
+#[command(about="Compile a wiki directory to static HTML pages", long_about = None)]
+struct Compile {
+    #[arg(help = "Root path of the wiki")]
+    directory: std::path::PathBuf,
+}
+
+#[derive(Parser)]
+#[command(about="Continuously watch and recompile a wiki directory", long_about = None)]
+struct Watch {
     #[arg(short = 'a', long = "addr", default_value = "0.0.0.0")]
     #[arg(help = "Address to listen on", hide_default_value = true)]
     addr: std::net::IpAddr,
@@ -29,22 +44,27 @@ struct Command {
     #[arg(help = "Port to listen on", hide_default_value = true)]
     port: u16,
 
-    #[arg(help = "Path to serve as HTTP root")]
+    #[arg(help = "Root path of the wiki")]
     directory: std::path::PathBuf,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Command::parse();
-    let context = GlobalContext::new(args.directory);
+    tracing_subscriber::fmt::init();
 
-    watch(context, (args.addr, args.port).into()).await
+    let cmd = Command::parse();
+    match cmd {
+        Command::Compile(args) => {
+            let context = GlobalContext::new(args.directory);
+            compile(Arc::new(context))
+        }
+        Command::Watch(args) => watch(args).await,
+    }
 }
 
-async fn watch(
-    mut context: GlobalContext,
-    addr: std::net::SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
+    let mut context = GlobalContext::new(args.directory);
+
     let livereload = LiveReloadLayer::new();
     let reloader = livereload.reloader();
     let app = Router::new()
@@ -61,31 +81,33 @@ async fn watch(
         }
     })?;
 
-    eprintln!("listening on: http://{}/", addr);
+    let addr: std::net::SocketAddr = (args.addr, args.port).into();
+    info!("listening on: http://{}/", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    tokio::spawn(async {
-        axum::serve(listener, app).await.ok();
+    tokio::spawn(async move {
+        while let Some(event) = recv.recv().await {
+            trace!(changed_files = ?event.paths, "recompiling");
+            let context_arc = Arc::new(context);
+            compile(context_arc.clone()).ok();
+            reloader.reload();
+            info!("reload");
+            context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| unreachable!());
+
+            let (loader, deps) = context.files_mut().dependencies();
+            for file_id in deps {
+                loader
+                    .resolve(file_id)
+                    .map(|path| watcher.watch(&path, notify::RecursiveMode::NonRecursive))
+                    .ok();
+            }
+            context.files_mut().reset();
+
+            while let Ok(_) = recv.try_recv() {}
+        }
     });
 
-    while let Some(event) = recv.recv().await {
-        eprintln!("changed: {:?}", event.paths);
-        let context_arc = Arc::new(context);
-        compile(context_arc.clone())?;
-        reloader.reload();
-        context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| unreachable!());
-
-        let (loader, deps) = context.files_mut().dependencies();
-        for file_id in deps {
-            loader
-                .resolve(file_id)
-                .map(|path| watcher.watch(&path, notify::RecursiveMode::NonRecursive))
-                .ok();
-        }
-        context.files_mut().reset();
-
-        while let Ok(_) = recv.try_recv() {}
-    }
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

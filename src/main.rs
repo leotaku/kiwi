@@ -96,7 +96,7 @@ fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>
         .into_iter()
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
-            entry.path().extension().map_or(false, |ext| ext == "typ")
+            entry.path().extension().is_some_and(|ext| ext == "typ")
                 && entry.metadata().is_ok_and(|m| m.is_file())
         })
         .filter_map(|entry| VirtualPath::virtualize(context.directory(), entry.path()).ok());

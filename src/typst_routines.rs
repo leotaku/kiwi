@@ -37,15 +37,11 @@ impl ExtRefElem {
     #[func]
     fn html_link(&self, engine: &Engine) -> EcoString {
         let relative_path = self.page.html_link(engine);
-
-        let target_link = self
-            .element
+        self.element
             .location()
             .and_then(|loc| self.page.anchors.get(&loc))
             .map(|id| eco_format!("{}#{}", relative_path, id))
-            .unwrap_or_else(|| relative_path);
-
-        target_link.into()
+            .unwrap_or_else(|| relative_path)
     }
 }
 
@@ -68,11 +64,10 @@ impl Page {
     #[func]
     fn html_link(&self, engine: &Engine) -> EcoString {
         let output_path = self.path.with_extension("html");
-        let relative_path = engine.world.main().vpath().parent().map_or_else(
+        engine.world.main().vpath().parent().map_or_else(
             || output_path.get_without_slash().into(),
             |parent| output_path.relative_from(&parent),
-        );
-        relative_path.into()
+        )
     }
 }
 
@@ -109,17 +104,15 @@ impl Wiki {
         Self(entries.collect())
     }
 
-    pub fn pages<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = (&'a VirtualPath, &'a typst_html::HtmlDocument)> {
+    pub fn pages(&self) -> impl Iterator<Item = (&VirtualPath, &typst_html::HtmlDocument)> {
         self.0.iter().filter_map(|entry| match entry.output {
             WikiEntry::Rendered(ref page) => Some((&page.path, &*page.document)),
             _ => None,
         })
     }
 
-    pub fn diagnostics<'a>(&'a self) -> impl Iterator<Item = &'a SourceDiagnostic> {
-        fn errors<'a>(entry: &'a WikiEntry) -> impl Iterator<Item = &'a SourceDiagnostic> {
+    pub fn diagnostics(&self) -> impl Iterator<Item = &SourceDiagnostic> {
+        fn errors(entry: &WikiEntry) -> impl Iterator<Item = &SourceDiagnostic> {
             match entry {
                 WikiEntry::Error(errors) => Some(errors.iter()).into_iter(),
                 _ => None.into_iter(),
@@ -129,8 +122,7 @@ impl Wiki {
 
         self.0
             .iter()
-            .filter_map(|entry| Some(entry.warnings.iter().chain(errors(&entry.output))))
-            .flatten()
+            .flat_map(|entry| entry.warnings.iter().chain(errors(&entry.output)))
     }
 
     fn is_incomplete(&self) -> bool {
@@ -184,7 +176,7 @@ impl Wiki {
                     Err(eco_vec![error])
                 }
             }
-            Some(_) if queried.len() > 0 => Err(eco_vec![SourceDiagnostic::error(
+            Some(_) if !queried.is_empty() => Err(eco_vec![SourceDiagnostic::error(
                 Span::detached(),
                 eco_format!(
                     "label `<{}>` occurs multiple times in the wiki",

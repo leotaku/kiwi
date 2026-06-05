@@ -36,11 +36,8 @@ impl typst_kit::downloader::Downloader for Downloader {
                 .get(url)
                 .send()
                 .await
-                .map_err(|err| std::io::Error::other(err))?;
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|err| std::io::Error::other(err))?;
+                .map_err(std::io::Error::other)?;
+            let bytes = resp.bytes().await.map_err(std::io::Error::other)?;
 
             Ok((Some(bytes.len()), Box::new(bytes.reader()) as Box<dyn Read>))
         })

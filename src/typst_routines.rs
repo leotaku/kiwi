@@ -6,10 +6,8 @@ use typst::{
     diag::{SourceDiagnostic, Warned},
     ecow::{EcoString, EcoVec, eco_format, eco_vec},
     engine::Engine,
-    foundations::{
-        Content, Dict, IntoValue, Label, Repr, Selector, Value,
-    },
-    introspection::{Introspector as _, Location, },
+    foundations::{Content, Dict, IntoValue, Label, Repr, Selector, Value},
+    introspection::{Introspector as _, Location},
     syntax::{Span, VirtualPath},
     utils::{LazyHash, ManuallyHash, hash128},
 };
@@ -136,9 +134,9 @@ impl Wiki {
     }
 
     fn is_incomplete(&self) -> bool {
-        self.0.iter().fold(false, |agg, entry| {
-            agg || matches!(entry.output, WikiEntry::Empty(_))
-        })
+        self.0
+            .iter()
+            .any(|entry| matches!(entry.output, WikiEntry::Empty(_)))
     }
 }
 
@@ -179,9 +177,10 @@ impl Wiki {
                     eco_format!("label `<{}>` does not exist in the wiki", label.resolve()),
                 );
                 if wiki.is_incomplete() {
-                    engine.sink.warn(error);
+                    // engine.sink.warn(error);
                     Ok(Value::None)
                 } else {
+                    println!("DEBUG: test?");
                     Err(eco_vec![error])
                 }
             }

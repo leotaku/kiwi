@@ -8,7 +8,7 @@ use clap::Parser;
 use notify::Watcher;
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
-use typst::{Library, LibraryExt, syntax::VirtualPath};
+use typst::{Library, LibraryExt as _, syntax::VirtualPath};
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 use typst_utils::LazyHash;
 use typst_world::{GlobalContext, TemporaryWorld};
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn watch(
-    context: Arc<GlobalContext>,
+    mut context: GlobalContext,
     addr: std::net::SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let livereload = LiveReloadLayer::new();
@@ -51,6 +51,9 @@ async fn watch(
         .layer(livereload);
 
     let (send, mut recv) = tokio::sync::mpsc::channel(100);
+    send.send(notify::Event::new(notify::EventKind::Other))
+        .await
+        .ok();
     let mut watcher = notify::recommended_watcher(move |event: Result<notify::Event, _>| {
         if let Ok(evt) = event
             && !evt.kind.is_access()
@@ -58,19 +61,6 @@ async fn watch(
             send.blocking_send(evt).ok();
         }
     })?;
-
-    compile(context.clone()).expect("todo");
-
-    let mut context = Arc::try_unwrap(context).unwrap_or_else(|_| todo!());
-
-    let (loader, deps) = context.files_mut().dependencies();
-    for file_id in deps {
-        println!("watch {:?}", file_id);
-        loader
-            .resolve(file_id)
-            .map(|path| watcher.watch(&path, notify::RecursiveMode::NonRecursive))
-            .ok();
-    }
 
     eprintln!("listening on: http://{}/", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -80,12 +70,20 @@ async fn watch(
     });
 
     while let Some(event) = recv.recv().await {
-        println!("changed: {:?}", event.paths);
-        context.files_mut().reset();
+        eprintln!("changed: {:?}", event.paths);
         let context_arc = Arc::new(context);
-        compile(context_arc.clone()).expect("todo");
+        compile(context_arc.clone())?;
         reloader.reload();
-        context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| todo!());
+        context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| unreachable!());
+
+        let (loader, deps) = context.files_mut().dependencies();
+        for file_id in deps {
+            loader
+                .resolve(file_id)
+                .map(|path| watcher.watch(&path, notify::RecursiveMode::NonRecursive))
+                .ok();
+        }
+        context.files_mut().reset();
     }
 
     Ok(())
@@ -103,20 +101,29 @@ fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>
         })
         .filter_map(|entry| VirtualPath::virtualize(context.directory(), entry.path()).ok());
 
-    let wiki = typst_routines::render_wiki(Wiki::from_paths(paths), &context);
-    // TODO: shortcut if there are errors
-    let wiki = typst_routines::render_wiki(wiki, &context);
+    let mut wiki = typst_routines::render_wiki(Wiki::from_paths(paths), &context);
+    for _ in 0..1 {
+        if wiki
+            .diagnostics()
+            .any(|diag| diag.severity == typst::diag::Severity::Error)
+        {
+            break;
+        }
+        wiki = typst_routines::render_wiki(wiki, &context);
+    }
+
+    let mut diagnostics: Vec<_> = wiki.diagnostics().cloned().collect();
 
     for (path, document) in wiki.pages() {
         let out_path = path.with_extension("html").realize(context.directory());
         match typst_html::html(document) {
             Ok(text) => std::fs::write(out_path, text)?,
-            Err(errs) => todo!(),
+            Err(errs) => diagnostics.extend(errs),
         }
     }
 
     let diagnostic_world = TemporaryWorld {
-        main: &VirtualPath::new(".").expect("this to be a valid path"),
+        main: &VirtualPath::new(".").expect("this to always be a valid path"),
         context: &context,
         library: &LazyHash::new(Library::default()),
     };
@@ -124,7 +131,7 @@ fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>
     typst_kit::diagnostics::emit(
         &mut stream,
         &diagnostic_world,
-        wiki.diagnostics().filter(|diag| {
+        diagnostics.iter().filter(|diag| {
             diag.message != "html export is under active development and incomplete"
         }),
         DiagnosticFormat::Human,

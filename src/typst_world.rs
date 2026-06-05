@@ -1,7 +1,6 @@
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use bytes::Buf as _;
@@ -61,7 +60,7 @@ pub struct GlobalContext {
 }
 
 impl GlobalContext {
-    pub fn new(root: PathBuf) -> Arc<Self> {
+    pub fn new(root: PathBuf) -> Self {
         let mut fonts = FontStore::new();
         fonts.extend(typst_kit::fonts::embedded());
         fonts.extend(typst_kit::fonts::system());
@@ -73,7 +72,7 @@ impl GlobalContext {
             }),
         ));
 
-        Arc::new(Self { root, fonts, files })
+        Self { root, fonts, files }
     }
 
     pub fn directory(&self) -> &Path {

@@ -7,14 +7,15 @@ use axum::{
     Router,
     extract::{Request, State},
     http,
+    middleware::map_response,
     response::{IntoResponse as _, Response},
     routing::get,
 };
 use clap::Parser;
 use notify::{Event, EventKind, Watcher as _};
 use tokio::sync::RwLock;
-use tower::{ServiceExt as _, layer::util::Stack, service_fn};
-use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
+use tower::ServiceExt as _;
+use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
 use tracing::{info, trace};
 use typst::{Library, LibraryExt as _, syntax::VirtualPath, utils::LazyHash};
@@ -107,7 +108,7 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
         .fallback(get(handler_with_servedir))
         .with_state((pages.clone(), args.r#static.map(ServeDir::new)))
         .layer(livereload)
-        .layer(no_cache_layer());
+        .layer(map_response(add_cache_headers));
 
     let addr: std::net::SocketAddr = (args.addr, args.port).into();
     info!("listening on: http://{}/", addr);
@@ -138,6 +139,20 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn add_cache_headers(mut rsp: Response) -> Response {
+    let headers = rsp.headers_mut();
+    headers.insert(
+        http::header::CACHE_CONTROL,
+        http::HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+    );
+    headers.insert(
+        http::header::PRAGMA,
+        http::HeaderValue::from_static("no-cache"),
+    );
+    headers.insert(http::header::EXPIRES, http::HeaderValue::from_static("0"));
+    rsp
 }
 
 type AppState = State<(Arc<RwLock<HashMap<VirtualPath, String>>>, Option<ServeDir>)>;
@@ -180,27 +195,6 @@ async fn handler(
         })?;
 
     Ok(axum::response::Html(content.clone()))
-}
-
-type Srhl = SetResponseHeaderLayer<http::HeaderValue>;
-
-fn no_cache_layer() -> Stack<Srhl, Stack<Srhl, Srhl>> {
-    Stack::new(
-        SetResponseHeaderLayer::overriding(
-            http::header::CACHE_CONTROL,
-            http::HeaderValue::from_static("no-cache, no-store, must-revalidate"),
-        ),
-        Stack::new(
-            SetResponseHeaderLayer::overriding(
-                http::header::PRAGMA,
-                http::HeaderValue::from_static("no-cache"),
-            ),
-            SetResponseHeaderLayer::overriding(
-                http::header::EXPIRES,
-                http::HeaderValue::from_static("0"),
-            ),
-        ),
-    )
 }
 
 fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, String> {

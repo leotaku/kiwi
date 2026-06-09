@@ -1627,6 +1627,7 @@ dependencies = [
  "reqwest",
  "rustc-hash",
  "tokio",
+ "tower",
  "tower-http",
  "tower-livereload",
  "tracing",

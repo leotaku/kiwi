@@ -1,12 +1,20 @@
 mod typst_routines;
 mod typst_world;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use axum::Router;
+use axum::{
+    Router,
+    extract::{Request, State},
+    http,
+    response::{IntoResponse as _, Response},
+    routing::get,
+};
 use clap::Parser;
 use notify::{Event, EventKind, Watcher as _};
-use tower_http::services::ServeDir;
+use tokio::sync::RwLock;
+use tower::{ServiceExt as _, layer::util::Stack, service_fn};
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use tower_livereload::LiveReloadLayer;
 use tracing::{info, trace};
 use typst::{Library, LibraryExt as _, syntax::VirtualPath, utils::LazyHash};
@@ -31,6 +39,9 @@ enum Command {
 struct Compile {
     #[arg(help = "Root path of the wiki")]
     directory: std::path::PathBuf,
+
+    #[arg(short = 'o', long = "out", help = "Path to write files to")]
+    output: std::path::PathBuf,
 }
 
 #[derive(Parser)]
@@ -46,6 +57,10 @@ struct Watch {
 
     #[arg(help = "Root path of the wiki")]
     directory: std::path::PathBuf,
+
+    #[arg(short = 's', long = "static")]
+    #[arg(help = "Path to serve additional static files from")]
+    r#static: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -54,22 +69,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cmd = Command::parse();
     match cmd {
-        Command::Compile(args) => {
-            let context = GlobalContext::new(args.directory);
-            compile(Arc::new(context))
-        }
+        Command::Compile(args) => compile(args),
         Command::Watch(args) => watch(args).await,
     }
+}
+
+fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
+    let context = GlobalContext::new(args.directory);
+
+    let mut pages = compile_to_memory(Arc::new(context));
+    for (path, contents) in pages.drain() {
+        let path = path.realize(&args.output);
+        std::fs::write(path, contents)?
+    }
+
+    Ok(())
 }
 
 async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     let mut context = GlobalContext::new(args.directory);
 
-    let livereload = LiveReloadLayer::new();
-    let reloader = livereload.reloader();
-    let app = Router::new()
-        .fallback_service(ServeDir::new(context.directory()))
-        .layer(livereload);
+    let pages = Arc::new(RwLock::new(HashMap::<VirtualPath, String>::new()));
 
     let (send, mut recv) = tokio::sync::mpsc::channel(100);
     send.send(Event::new(EventKind::Other)).await.ok();
@@ -81,6 +101,14 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
+    let livereload = LiveReloadLayer::new();
+    let reloader = livereload.reloader();
+    let app = Router::new()
+        .fallback(get(handler_with_servedir))
+        .with_state((pages.clone(), args.r#static.map(ServeDir::new)))
+        .layer(livereload)
+        .layer(no_cache_layer());
+
     let addr: std::net::SocketAddr = (args.addr, args.port).into();
     info!("listening on: http://{}/", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -89,7 +117,7 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = recv.recv().await {
             trace!(changed_files = ?event.paths, "recompiling");
             let context_arc = Arc::new(context);
-            compile(context_arc.clone()).ok();
+            *pages.write().await = compile_to_memory(context_arc.clone());
             reloader.reload();
             info!("reload");
             context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| unreachable!());
@@ -112,7 +140,70 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>> {
+type AppState = State<(Arc<RwLock<HashMap<VirtualPath, String>>>, Option<ServeDir>)>;
+
+async fn handler_with_servedir<T: Send + 'static>(
+    State((pages, serve_dir)): AppState,
+    req: Request<T>,
+) -> Response {
+    let guard = pages.read().await;
+    match (serve_dir, handler(req.uri(), &guard).await) {
+        (_, Ok(rsp)) => rsp.into_response(),
+        (Some(serve_dir), Err(_)) => serve_dir.oneshot(req).await.into_response(),
+        (_, Err(err)) => err,
+    }
+}
+
+async fn handler(
+    uri: &axum::http::Uri,
+    pages: &HashMap<VirtualPath, String>,
+) -> Result<axum::response::Html<String>, Response> {
+    let path = VirtualPath::new(uri.path()).map_err(|_| {
+        Response::builder()
+            .status(500)
+            .body("weird path error".into())
+            .unwrap_or_else(|_| unreachable!())
+    })?;
+
+    let content = pages
+        .get(&path)
+        .or_else(|| {
+            path.join("index.html")
+                .ok()
+                .and_then(|path| pages.get(&path))
+        })
+        .ok_or_else(|| {
+            Response::builder()
+                .status(404)
+                .body("page not found".into())
+                .unwrap_or_else(|_| unreachable!())
+        })?;
+
+    Ok(axum::response::Html(content.clone()))
+}
+
+type Srhl = SetResponseHeaderLayer<http::HeaderValue>;
+
+fn no_cache_layer() -> Stack<Srhl, Stack<Srhl, Srhl>> {
+    Stack::new(
+        SetResponseHeaderLayer::overriding(
+            http::header::CACHE_CONTROL,
+            http::HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+        ),
+        Stack::new(
+            SetResponseHeaderLayer::overriding(
+                http::header::PRAGMA,
+                http::HeaderValue::from_static("no-cache"),
+            ),
+            SetResponseHeaderLayer::overriding(
+                http::header::EXPIRES,
+                http::HeaderValue::from_static("0"),
+            ),
+        ),
+    )
+}
+
+fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, String> {
     let mut stream = StandardStream::stderr(Default::default());
 
     let paths = WalkDir::new(context.directory())
@@ -135,12 +226,15 @@ fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>
         wiki = typst_routines::render_wiki(wiki, &context);
     }
 
+    let mut pages = HashMap::new();
     let mut diagnostics: Vec<_> = wiki.diagnostics().cloned().collect();
 
     for (path, document) in wiki.pages() {
-        let out_path = path.with_extension("html").realize(context.directory());
+        let out_path = path.with_extension("html");
         match typst_html::html(document) {
-            Ok(text) => std::fs::write(out_path, text)?,
+            Ok(text) => {
+                pages.insert(out_path, text);
+            }
             Err(errs) => diagnostics.extend(errs),
         }
     }
@@ -158,7 +252,8 @@ fn compile(context: Arc<GlobalContext>) -> Result<(), Box<dyn std::error::Error>
             diag.message != "html export is under active development and incomplete"
         }),
         DiagnosticFormat::Human,
-    )?;
+    )
+    .unwrap_or_else(|_| todo!());
 
-    Ok(())
+    pages
 }

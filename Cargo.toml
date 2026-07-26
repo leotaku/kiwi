@@ -10,12 +10,12 @@ clap = { version = "4.6.1", features = ["derive"] }
 notify = "8.2.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
 tokio = { version = "1.52.3", features = ["macros", "net", "rt", "rt-multi-thread"] }
-typst = { git = "https://github.com/typst/typst.git" }
-typst-html = { git = "https://github.com/typst/typst.git" }
-typst-kit = { git = "https://github.com/typst/typst.git", features = ["system-files", "universe-packages", "embedded-fonts", "scan-fonts", "emit-diagnostics", "datetime"] }
-typst-macros = { git = "https://github.com/typst/typst.git" }
-typst-library = { git = "https://github.com/typst/typst.git" }
-typst-utils = { git = "https://github.com/typst/typst.git" }
+typst = "0.15.1"
+typst-html = "0.15.1"
+typst-kit = { version = "0.15.1", features = ["system-files", "universe-packages", "embedded-fonts", "scan-fonts", "emit-diagnostics", "datetime"] }
+typst-macros = "0.15.1"
+typst-library = "0.15.1"
+typst-utils = "0.15.1"
 walkdir = "2.5.0"
 rustc-hash = "2.1.2"
 tower-http = { version = "0.6.11", features = ["fs"] }

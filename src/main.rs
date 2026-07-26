@@ -80,7 +80,7 @@ fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
 
     let mut pages = compile_to_memory(Arc::new(context));
     for (path, contents) in pages.drain() {
-        let path = path.realize(&args.output);
+        let path = path.realize(&args.output)?;
         std::fs::write(path, contents)?
     }
 
@@ -225,7 +225,7 @@ fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, String
 
     for (path, document) in wiki.pages() {
         let out_path = path.with_extension("html");
-        match typst_html::html(document) {
+        match typst_html::html(document, &Default::default()) {
             Ok(text) => {
                 pages.insert(out_path, text);
             }

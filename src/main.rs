@@ -101,6 +101,7 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
             send.blocking_send(evt).ok();
         }
     })?;
+    watcher.watch(context.directory(), notify::RecursiveMode::Recursive)?;
 
     let livereload = LiveReloadLayer::new();
     let reloader = livereload.reloader();

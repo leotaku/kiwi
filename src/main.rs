@@ -175,10 +175,11 @@ async fn handler(
     pages: &HashMap<VirtualPath, String>,
 ) -> Result<axum::response::Html<String>, Response> {
     let path = VirtualPath::new(uri.path()).map_err(|_| {
-        Response::builder()
-            .status(500)
-            .body("weird path error".into())
-            .unwrap_or_else(|_| unreachable!())
+        (
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::response::Html("<code>weird path error</code>"),
+        )
+            .into_response()
     })?;
 
     let content = pages
@@ -189,10 +190,11 @@ async fn handler(
                 .and_then(|path| pages.get(&path))
         })
         .ok_or_else(|| {
-            Response::builder()
-                .status(404)
-                .body("page not found".into())
-                .unwrap_or_else(|_| unreachable!())
+            (
+                http::StatusCode::NOT_FOUND,
+                axum::response::Html("<code>page not found</code>"),
+            )
+                .into_response()
         })?;
 
     Ok(axum::response::Html(content.clone()))

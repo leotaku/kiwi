@@ -206,6 +206,7 @@ fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, String
         .filter(|entry| {
             entry.path().extension().is_some_and(|ext| ext == "typ")
                 && entry.metadata().is_ok_and(|m| m.is_file())
+                && !path_is_hidden(entry.path())
         })
         .filter_map(|entry| VirtualPath::virtualize(context.directory(), entry.path()).ok());
 
@@ -250,4 +251,9 @@ fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, String
     .unwrap_or_else(|_| todo!());
 
     pages
+}
+
+fn path_is_hidden(path: &std::path::Path) -> bool {
+    path.iter()
+        .any(|segment| segment.as_encoded_bytes().starts_with(".".as_ref()))
 }

@@ -3,12 +3,16 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use typst::{
     Features, Library, LibraryExt as _, World,
-    diag::{SourceDiagnostic, Warned},
+    diag::{HintedString, SourceDiagnostic, Warned},
     ecow::{EcoString, EcoVec, eco_format},
     engine::Engine,
-    foundations::{Content, Dict, IntoValue, Label, Repr, Selector, Value},
+    foundations::{
+        BundlePath, Bytes, Content, Dict, IntoValue as _, Label, NativeElement as _, PathOrStr,
+        Recipe, Repr, Selector, Transformation, Value,
+    },
     introspection::{Introspector as _, Location},
-    syntax::VirtualPath,
+    model::{AssetData, AssetElem},
+    syntax::{Span, Spanned, VirtualPath},
     utils::{LazyHash, ManuallyHash, hash128},
 };
 use typst_macros::func;
@@ -86,6 +90,7 @@ enum WikiEntry {
     Empty(VirtualPath),
     Rendered(Arc<Page>),
     Error(EcoVec<SourceDiagnostic>),
+    Resource(VirtualPath, Bytes),
 }
 
 #[typst_macros::ty(scope)]
@@ -104,6 +109,13 @@ impl Wiki {
     pub fn pages(&self) -> impl Iterator<Item = (&VirtualPath, &typst_html::HtmlDocument)> {
         self.0.iter().filter_map(|entry| match entry.output {
             WikiEntry::Rendered(ref page) => Some((&page.path, &*page.document)),
+            _ => None,
+        })
+    }
+
+    pub fn resources(&self) -> impl Iterator<Item = (&VirtualPath, &Bytes)> {
+        self.0.iter().filter_map(|entry| match entry.output {
+            WikiEntry::Resource(ref path, ref content) => Some((path, content)),
             _ => None,
         })
     }
@@ -172,6 +184,34 @@ impl Wiki {
             Some(ext_ref) => Ok(ext_ref.into_value()),
         }
     }
+
+    #[func]
+    fn resource(
+        &mut self,
+        engine: &Engine,
+        path: Spanned<PathOrStr>,
+        #[default] anchor: Option<Content>,
+    ) -> Result<Value, HintedString> {
+        let anchor_span = anchor
+            .map(|content| content.span())
+            .unwrap_or_else(|| path.span);
+        let resolved = path.v.resolve(
+            anchor_span
+                .id()
+                .ok_or_else(|| "the containing file is unknown")?,
+        )?;
+        if resolved.root() != engine.world.main().root() {
+            return Err("including resources from outside the main root is not supported".into());
+        }
+
+        let content = engine.world.file(resolved.clone().intern())?;
+
+        Ok(AssetElem::new(
+            BundlePath::new(resolved.vpath().clone())?,
+            AssetData(content),
+        )
+        .into_value())
+    }
 }
 
 impl Repr for Wiki {
@@ -200,6 +240,11 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
         .build();
     let global = library.global.scope_mut();
     global.define_elem::<ExtRefElem>();
+    library.styles.push(Recipe::new(
+        Some(AssetElem::ELEM.select()),
+        Transformation::Content(Content::empty()),
+        Span::detached(),
+    ));
     let library = LazyHash::new(library);
 
     for path in paths {
@@ -221,6 +266,19 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
                     .filter_map(|content| content.location())
                     .collect();
                 let anchors = typst_html::create_link_anchors(&mut document, &targets);
+
+                for asset in document
+                    .introspector()
+                    .query(&Selector::Elem(AssetElem::ELEM, None))
+                    .into_iter()
+                    .filter_map(|content| content.into_packed::<AssetElem>().ok())
+                    .map(|packed| packed.unpack())
+                {
+                    entries.push(Warned {
+                        output: WikiEntry::Resource(asset.path.into_inner(), asset.data.0),
+                        warnings: EcoVec::new(),
+                    });
+                }
 
                 let hash = hash128(document.root());
                 entries.push(Warned {

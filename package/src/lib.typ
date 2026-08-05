@@ -56,6 +56,12 @@
         }
     }
 
+    show image: it => [
+        #let asset = sys.inputs.x-wiki.read-asset(it.source, it)
+        #asset
+        #html.img(src: asset.path)
+    ]
+
     h.html[
         #h.head[
             #h.meta(charset: "utf-8")

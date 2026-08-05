@@ -178,7 +178,7 @@ impl Wiki {
     }
 
     #[func]
-    fn resource(
+    fn read_asset(
         &mut self,
         engine: &Engine,
         path: Spanned<PathOrStr>,

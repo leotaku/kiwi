@@ -90,7 +90,7 @@ fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
 async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     let mut context = GlobalContext::new(args.directory);
 
-    let pages = Arc::new(RwLock::new(HashMap::<VirtualPath, String>::new()));
+    let pages = Arc::new(RwLock::new(HashMap::<VirtualPath, Vec<u8>>::new()));
 
     let (send, mut recv) = tokio::sync::mpsc::channel(100);
     send.send(Event::new(EventKind::Other)).await.ok();
@@ -156,7 +156,7 @@ async fn add_cache_headers(mut rsp: Response) -> Response {
     rsp
 }
 
-type AppState = State<(Arc<RwLock<HashMap<VirtualPath, String>>>, Option<ServeDir>)>;
+type AppState = State<(Arc<RwLock<HashMap<VirtualPath, Vec<u8>>>>, Option<ServeDir>)>;
 
 async fn handler_with_servedir<T: Send + 'static>(
     State((pages, serve_dir)): AppState,
@@ -172,8 +172,8 @@ async fn handler_with_servedir<T: Send + 'static>(
 
 async fn handler(
     uri: &axum::http::Uri,
-    pages: &HashMap<VirtualPath, String>,
-) -> Result<axum::response::Html<String>, Response> {
+    pages: &HashMap<VirtualPath, Vec<u8>>,
+) -> Result<Response, Response> {
     let path = VirtualPath::new(uri.path()).map_err(|_| {
         (
             http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -182,12 +182,13 @@ async fn handler(
             .into_response()
     })?;
 
-    let content = pages
+    let (path, content) = pages
         .get(&path)
+        .map(|content| (path.clone(), content))
         .or_else(|| {
             path.join("index.html")
                 .ok()
-                .and_then(|path| pages.get(&path))
+                .and_then(|path| pages.get(&path).map(|content| (path, content)))
         })
         .ok_or_else(|| {
             (
@@ -197,10 +198,16 @@ async fn handler(
                 .into_response()
         })?;
 
-    Ok(axum::response::Html(content.clone()))
+    let content_type = mime_guess::from_path(path.get_with_slash()).first_or_octet_stream();
+    let response = (
+        [(http::header::CONTENT_TYPE, content_type.as_ref())],
+        content.clone(),
+    );
+
+    Ok(response.into_response())
 }
 
-fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, String> {
+fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, Vec<u8>> {
     let mut stream = StandardStream::stderr(Default::default());
 
     let paths = WalkDir::new(context.directory())
@@ -231,10 +238,19 @@ fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, String
         let out_path = path.with_extension("html");
         match typst_html::html(document, &Default::default()) {
             Ok(text) => {
-                pages.insert(out_path, text);
+                pages.insert(out_path, text.into_bytes());
             }
             Err(errs) => diagnostics.extend(errs),
         }
+    }
+
+    match typst_routines::collect_assets(&wiki) {
+        Ok(resources) => {
+            for (path, content) in resources {
+                pages.insert(path, content.into_vec());
+            }
+        }
+        Err(errs) => diagnostics.extend(errs),
     }
 
     let diagnostic_world = TemporaryWorld {

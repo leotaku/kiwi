@@ -1654,6 +1654,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "mime_guess",
  "notify",
  "reqwest",
  "rustc-hash",

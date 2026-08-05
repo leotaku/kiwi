@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use typst::{
     Features, Library, LibraryExt as _, World,
-    diag::{HintedString, SourceDiagnostic, Warned},
+    diag::{HintedString, Severity, SourceDiagnostic, Warned},
     ecow::{EcoString, EcoVec, eco_format},
     engine::Engine,
     foundations::{
@@ -90,7 +90,6 @@ enum WikiEntry {
     Empty(VirtualPath),
     Rendered(Arc<Page>),
     Error(EcoVec<SourceDiagnostic>),
-    Resource(VirtualPath, Bytes),
 }
 
 #[typst_macros::ty(scope)]
@@ -109,13 +108,6 @@ impl Wiki {
     pub fn pages(&self) -> impl Iterator<Item = (&VirtualPath, &typst_html::HtmlDocument)> {
         self.0.iter().filter_map(|entry| match entry.output {
             WikiEntry::Rendered(ref page) => Some((&page.path, &*page.document)),
-            _ => None,
-        })
-    }
-
-    pub fn resources(&self) -> impl Iterator<Item = (&VirtualPath, &Bytes)> {
-        self.0.iter().filter_map(|entry| match entry.output {
-            WikiEntry::Resource(ref path, ref content) => Some((path, content)),
             _ => None,
         })
     }
@@ -267,19 +259,6 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
                     .collect();
                 let anchors = typst_html::create_link_anchors(&mut document, &targets);
 
-                for asset in document
-                    .introspector()
-                    .query(&Selector::Elem(AssetElem::ELEM, None))
-                    .into_iter()
-                    .filter_map(|content| content.into_packed::<AssetElem>().ok())
-                    .map(|packed| packed.unpack())
-                {
-                    entries.push(Warned {
-                        output: WikiEntry::Resource(asset.path.into_inner(), asset.data.0),
-                        warnings: EcoVec::new(),
-                    });
-                }
-
                 let hash = hash128(document.root());
                 entries.push(Warned {
                     output: WikiEntry::Rendered(Arc::new(Page {
@@ -303,4 +282,57 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
     }
 
     Wiki(entries)
+}
+
+pub fn collect_assets<'a>(
+    wiki: &'a Wiki,
+) -> Result<Vec<(VirtualPath, Bytes)>, Vec<SourceDiagnostic>> {
+    let mut potential_outputs = FxHashMap::default();
+
+    for (_, document) in wiki.pages() {
+        for (span, asset) in document
+            .introspector()
+            .query(&Selector::Elem(AssetElem::ELEM, None))
+            .into_iter()
+            .filter_map(|content| content.into_packed::<AssetElem>().ok())
+            .map(|packed| (packed.span(), packed.unpack()))
+        {
+            potential_outputs
+                .entry(asset.path.into_inner())
+                .or_insert_with(Vec::new)
+                .push((span, asset.data));
+        }
+    }
+
+    let mut outputs = Vec::new();
+    let mut errors = Vec::new();
+    for (path, mut candidates) in potential_outputs.drain() {
+        let first = candidates.pop().unwrap_or_else(|| unreachable!());
+        let conflict_messages: EcoVec<_> = candidates
+            .into_iter()
+            .filter(|item| item.1 != first.1)
+            .map(|item| Spanned::new("conflicting asset".into(), item.0.into()))
+            .collect();
+
+        if conflict_messages.len() > 0 {
+            errors.push(SourceDiagnostic {
+                severity: Severity::Error,
+                span: first.0.into(),
+                message: eco_format!(
+                    r#"multiple conflicting assets for output "{}""#,
+                    path.get_with_slash()
+                ),
+                trace: Default::default(),
+                hints: conflict_messages,
+            });
+        } else {
+            outputs.push((path, first.1.0))
+        }
+    }
+
+    if errors.len() > 0 {
+        Err(errors)
+    } else {
+        Ok(outputs)
+    }
 }

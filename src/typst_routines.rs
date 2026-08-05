@@ -152,12 +152,11 @@ impl Wiki {
     }
 
     #[func]
-    fn query_label(&self, engine: &Engine, label: Label) -> Result<Value, EcoString> {
-        let wiki = get_wiki(engine);
-        let mut queried = wiki.query(Selector::Label(label));
+    fn query_label(&self, label: Label) -> Result<Value, EcoString> {
+        let mut queried = self.query(Selector::Label(label));
         match queried.pop() {
             None => {
-                if wiki.is_incomplete() {
+                if self.is_incomplete() {
                     Ok(Value::None)
                 } else {
                     Err(eco_format!(
@@ -179,21 +178,6 @@ impl Repr for Wiki {
     fn repr(&self) -> EcoString {
         "wiki".into()
     }
-}
-
-fn get_wiki<'a>(engine: &'a Engine) -> &'a Wiki {
-    let sys = engine.library.global.scope().get("sys").unwrap().read();
-    let Value::Module(sys) = sys else {
-        unreachable!()
-    };
-    let Value::Dict(dict) = sys.scope().get("inputs").unwrap().read() else {
-        unreachable!()
-    };
-    let Value::Dyn(wiki) = dict.get("x-wiki").unwrap() else {
-        unreachable!()
-    };
-
-    wiki.downcast().unwrap()
 }
 
 pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {

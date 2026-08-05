@@ -81,6 +81,7 @@ fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
     let mut pages = compile_to_memory(Arc::new(context));
     for (path, contents) in pages.drain() {
         let path = path.realize(&args.output)?;
+        path.parent().and_then(|p| std::fs::create_dir_all(p).ok());
         std::fs::write(path, contents)?
     }
 

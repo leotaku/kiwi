@@ -307,17 +307,17 @@ pub fn collect_assets<'a>(
     let mut outputs = Vec::new();
     let mut errors = Vec::new();
     for (path, mut candidates) in potential_outputs.drain() {
-        let first = candidates.pop().unwrap_or_else(|| unreachable!());
+        let (first_span, first_data) = candidates.pop().unwrap_or_else(|| unreachable!());
         let conflict_messages: EcoVec<_> = candidates
             .into_iter()
-            .filter(|item| item.1 != first.1)
-            .map(|item| Spanned::new("conflicting asset".into(), item.0.into()))
+            .filter(|(_, data)| *data != first_data)
+            .map(|(span, _)| Spanned::new("conflicting asset".into(), span.into()))
             .collect();
 
         if conflict_messages.len() > 0 {
             errors.push(SourceDiagnostic {
                 severity: Severity::Error,
-                span: first.0.into(),
+                span: first_span.into(),
                 message: eco_format!(
                     r#"multiple conflicting assets for output "{}""#,
                     path.get_with_slash()
@@ -326,7 +326,7 @@ pub fn collect_assets<'a>(
                 hints: conflict_messages,
             });
         } else {
-            outputs.push((path, first.1.0))
+            outputs.push((path, first_data.0))
         }
     }
 

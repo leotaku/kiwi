@@ -134,7 +134,7 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
             }
             context.files_mut().reset();
 
-            while let Ok(_) = recv.try_recv() {}
+            while recv.try_recv().is_ok() {}
         }
     });
 
@@ -171,6 +171,7 @@ async fn handler_with_servedir<T: Send + 'static>(
     }
 }
 
+#[expect(clippy::result_large_err)]
 async fn handler(
     uri: &axum::http::Uri,
     pages: &HashMap<VirtualPath, Vec<u8>>,

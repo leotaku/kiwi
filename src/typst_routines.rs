@@ -187,11 +187,9 @@ impl Wiki {
         let anchor_span = anchor
             .map(|content| content.span())
             .unwrap_or_else(|| path.span);
-        let resolved = path.v.resolve(
-            anchor_span
-                .id()
-                .ok_or_else(|| "the containing file is unknown")?,
-        )?;
+        let resolved = path
+            .v
+            .resolve(anchor_span.id().ok_or("the containing file is unknown")?)?;
         if resolved.root() != engine.world.main().root() {
             return Err("including resources from outside the main root is not supported".into());
         }
@@ -284,9 +282,7 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
     Wiki(entries)
 }
 
-pub fn collect_assets<'a>(
-    wiki: &'a Wiki,
-) -> Result<Vec<(VirtualPath, Bytes)>, Vec<SourceDiagnostic>> {
+pub fn collect_assets(wiki: &Wiki) -> Result<Vec<(VirtualPath, Bytes)>, Vec<SourceDiagnostic>> {
     let mut potential_outputs = FxHashMap::default();
 
     for (_, document) in wiki.pages() {
@@ -314,7 +310,7 @@ pub fn collect_assets<'a>(
             .map(|(span, _)| Spanned::new("conflicting asset".into(), span.into()))
             .collect();
 
-        if conflict_messages.len() > 0 {
+        if !conflict_messages.is_empty() {
             errors.push(SourceDiagnostic {
                 severity: Severity::Error,
                 span: first_span.into(),
@@ -330,9 +326,9 @@ pub fn collect_assets<'a>(
         }
     }
 
-    if errors.len() > 0 {
-        Err(errors)
-    } else {
+    if errors.is_empty() {
         Ok(outputs)
+    } else {
+        Err(errors)
     }
 }

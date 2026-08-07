@@ -185,12 +185,11 @@ async fn handler(
     })?;
 
     let (path, content) = pages
-        .get(&path)
-        .map(|content| (path.clone(), content))
+        .get_key_value(&path)
         .or_else(|| {
             path.join("index.html")
                 .ok()
-                .and_then(|path| pages.get(&path).map(|content| (path, content)))
+                .and_then(|path| pages.get_key_value(&path))
         })
         .ok_or_else(|| {
             (

@@ -1,10 +1,22 @@
+:root {
+  color-scheme: light dark;
+}
+
 h1 {
   font-size: 1.25rem;
   margin-block: 0;
 }
-
 h2, h3, h4, h5, h6 {
   font-size: 1rem;
+}
+h1, h2, h3, h4, h5, h6 {
+  width: fit-content;
+}
+code {
+  font-size: math;
+}
+pre {
+  font-size: large;
 }
 
 footer {
@@ -22,6 +34,6 @@ section {
   margin-block-end: 16px;
 }
 
-:root {
-  color-scheme: light dark;
+main > :not(hr) {
+  max-width: 66ch;
 }

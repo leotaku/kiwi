@@ -8,7 +8,7 @@
     }
     show heading.where(level: 1): it => {
         title.update(it.body.text)
-        it
+        h.h1(tabindex: 1, it.body)
     }
     set heading(numbering: (..it) => if it.pos().len() <= 1 {} else {
         numbering("1.",..it.pos().slice(1))
@@ -59,8 +59,20 @@
     show image: it => [
         #let asset = sys.inputs.x-wiki.read-asset(it.source, it)
         #asset
-        #html.img(src: asset.path)
+        #h.img(src: asset.path)
     ]
+
+    set raw(theme: none)
+
+    show pagebreak: h.hr()
+
+    show h.elem.where(tag: "pre"): it => {
+        if "contenteditable" not in it.attrs {
+            h.elem("pre", attrs: (tabindex: "-1", contenteditable: "true", spellcheck: "false", aria-readonly: "true", onbeforeinput: "event.preventDefault()"))[#it.body]
+        } else {
+            it
+        }
+    }
 
     let favicon = asset("favicon.svg", read("favicon.svg"))
     favicon

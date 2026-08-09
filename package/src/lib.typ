@@ -62,11 +62,15 @@
         #html.img(src: asset.path)
     ]
 
+    let favicon = asset("favicon.svg", read("favicon.svg"))
+    favicon
+
     h.html[
         #h.head[
             #h.meta(charset: "utf-8")
             #h.meta(name: "viewport", content: "width=device-width, initial-scale=1")
             #h.title[#context title.final() | digraph.me]
+            #h.link(rel: "icon", type: "image/svg", href: favicon.path)
             #h.style(read("index.css"))
         ]
         #h.body[

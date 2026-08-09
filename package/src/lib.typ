@@ -1,3 +1,48 @@
+// original author: ntjess
+#let plain-text(it) = {
+    return if type(it) == str {
+        it
+    } else if it == [ ] {
+        " "
+    } else if it.has("children") {
+        it.children.map(plain-text).join()
+    } else if it.has("body") {
+        plain-text(it.body)
+    } else if it.has("text") {
+        plain-text(it.text)
+    } else if it.func() == smartquote {
+        if it.double { "\"" } else { "'" }
+    } else {
+        panic("Not sure how to handle type `" + repr(func) + "`")
+    }
+}
+
+#let balance-quotes(input) = {
+    let quotes = (
+        "\"": ("“", "”"),
+        "'": ("‘", "’"),
+    )
+
+    let graphemes = input.graphemes()
+    let running-counts = graphemes.fold(
+        (quotes.map(_ => 0),),
+        (acc, char) => {
+            let next = for quote in quotes.keys() {
+                (str(quote): acc.last().at(quote) + int(char == quote),)
+            }
+            acc + (next,)
+        }
+    ).slice(1)
+
+    for (char, counts) in graphemes.zip(running-counts) {
+        if char in quotes {
+            quotes.at(char).at(calc.rem(counts.at(char) + 1, 2))
+        } else {
+            char
+        }
+    }
+}
+
 #let page(body) = if "x-wiki" in sys.inputs {
     let h = html
     let wiki = sys.inputs.x-wiki
@@ -7,7 +52,7 @@
         h.elem("h" + str(it.level), it.body)
     }
     show heading.where(level: 1): it => {
-        title.update(it.body.text)
+        title.update(plain-text(it.body))
         h.h1(tabindex: 1, it.body)
     }
     set heading(numbering: (..it) => if it.pos().len() <= 1 {} else {

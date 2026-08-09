@@ -125,7 +125,7 @@
     show image: it => [
         #let asset = sys.inputs.x-wiki.read-asset(it.source, it)
         #asset
-        #h.img(src: asset.path)
+        #h.img(src: asset.path, loading: "lazy")
     ]
 
     set raw(theme: none)

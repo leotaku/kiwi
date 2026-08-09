@@ -1,3 +1,9 @@
+#let wiki = if "x-wiki" in sys.inputs {
+    sys.inputs.x-wiki
+} else {
+    import "fake-wiki.typ"
+    fake-wiki
+}
 
 #let plain-text(content) = {
     let flatten(it) = {
@@ -61,7 +67,6 @@
 
 #let page(body) = if "x-wiki" in sys.inputs {
     let h = html
-    let wiki = sys.inputs.x-wiki
 
     let title = state("kiwi-page-title", none)
     show heading: it => {

@@ -65,7 +65,7 @@
     h.html[
         #h.head[
             #h.meta(charset: "utf-8")
-            #h.title(context title.final())
+            #h.title[#context title.final() | digraph.me]
             #h.style(read("index.css"))
         ]
         #h.body[

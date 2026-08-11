@@ -24,45 +24,54 @@
         }
     }
 
-    let handle-apostrophe(input) = {
+    let balance-quotes(input) = {
         let graphemes = input.clusters()
+        let windows = ((" ", graphemes.at(0)),) + graphemes.windows(2)
 
-        graphemes.first() + for (first, second) in graphemes.windows(2) {
-            if first != " " and second == "'" {
-                "’"
+        let quote-rule(
+            prev, char, nesting-stack,
+            rules: ("\"": ("“", "”", "″"), "'": ("‘", "’", "′"))
+        ) = {
+            if (char not in rules) {
+                return (char, nesting-stack)
+            }
+
+            let (opening, closing, math) = rules.at(char)
+            let opened = nesting-stack.last(default: none)
+
+            if (
+                opened != char
+                and prev.contains(regex("\d"))
+            ) {
+                (math, nesting-stack)
+            } else if (
+                char == "'"
+                and opened != char
+                and prev.contains(regex("[\w\u{FFFC}]"))
+            ) {
+                ("’", nesting-stack)
+            } else if (
+                char == opened
+                and not prev.contains(regex("[\s\n(\[{]"))
+            ) {
+                (closing, nesting-stack.slice(0, -1))
             } else {
-                second
+                (opening, nesting-stack + (char,))
             }
         }
-    }
 
-    let balance-quotes(input) = {
-        let quotes = (
-            "\"": ("“", "”"),
-            "'": ("‘", "’"),
+        let (balanced, _) = windows.fold(
+            ("", ()),
+            ((acc, nesting-stack), (prev, char)) => {
+                let (char, nesting-stack) = quote-rule(prev, char, nesting-stack)
+                (acc + char, nesting-stack)
+            }
         )
 
-        let graphemes = input.clusters()
-        let running-counts = graphemes.fold(
-            (quotes.map(_ => 0),),
-            (acc, char) => {
-                let next = for quote in quotes.keys() {
-                    (str(quote): acc.last().at(quote) + int(char == quote),)
-                }
-                acc + (next,)
-            }
-        ).slice(1)
-
-        for (char, counts) in graphemes.zip(running-counts) {
-            if char in quotes {
-                quotes.at(char).at(calc.rem(counts.at(char) + 1, 2))
-            } else {
-                char
-            }
-        }
+        balanced
     }
 
-    balance-quotes(handle-apostrophe(flatten(content)))
+    balance-quotes(flatten(content))
 }
 
 #let page(body) = if "x-wiki" in sys.inputs {

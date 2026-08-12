@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 use tower::ServiceExt as _;
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 use typst::{Library, LibraryExt as _, syntax::VirtualPath, utils::LazyHash};
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 use walkdir::WalkDir;
@@ -62,6 +62,10 @@ struct Watch {
     #[arg(short = 's', long = "static")]
     #[arg(help = "Path to serve additional static files from")]
     r#static: Option<std::path::PathBuf>,
+
+    #[arg(long = "lsp-index")]
+    #[arg(help = "Path to write LSP index file to")]
+    index: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -121,6 +125,11 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
             trace!(changed_files = ?event.paths, "recompiling");
             let context_arc = Arc::new(context);
             *pages.write().await = compile_to_memory(context_arc.clone());
+            if let Some(ref index_path) = args.index {
+                generate_typst_index(context_arc.directory(), index_path).unwrap_or_else(|err| {
+                    warn!("could not write LSP index file: {}", err.to_string())
+                })
+            }
             reloader.reload();
             info!("reload");
             context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| unreachable!());
@@ -271,6 +280,35 @@ fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, Vec<u8
     .unwrap_or_else(|_| todo!());
 
     pages
+}
+
+fn generate_typst_index(
+    root_path: &std::path::Path,
+    index_path: &std::path::Path,
+) -> std::io::Result<()> {
+    let index_path_parent = index_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(".."));
+
+    let paths = WalkDir::new(root_path)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.path().extension().is_some_and(|ext| ext == "typ")
+                && entry.metadata().is_ok_and(|m| m.is_file())
+                && !path_is_hidden(entry.path())
+        })
+        .filter_map(|entry| VirtualPath::virtualize(index_path_parent, entry.path()).ok());
+
+    let mut include_statements: Vec<_> = paths
+        .map(|path| format!(r#"#include("{}")"#, path.get_without_slash()))
+        .collect();
+    include_statements.insert(0, r#"#set heading(numbering: "1.")"#.to_owned());
+    include_statements.push("".to_owned());
+
+    std::fs::write(index_path, include_statements.join("\n"))?;
+
+    Ok(())
 }
 
 fn path_is_hidden(path: &std::path::Path) -> bool {

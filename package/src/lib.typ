@@ -132,7 +132,7 @@
     }
 
     show image: it => [
-        #let asset = sys.inputs.x-wiki.read-asset(it.source, it)
+        #let asset = wiki.read-asset(it.source, it)
         #asset
         #h.img(src: asset.path, loading: "lazy")
     ]

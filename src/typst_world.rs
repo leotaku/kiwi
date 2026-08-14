@@ -1,7 +1,4 @@
-use std::{
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use bytes::Buf as _;
 use tokio::runtime::Handle;
@@ -30,17 +27,19 @@ impl typst_kit::downloader::Downloader for Downloader {
         _: &dyn std::any::Any,
         url: &str,
     ) -> std::io::Result<(Option<usize>, Box<dyn std::io::Read>)> {
-        Handle::current().block_on(async move {
-            let resp = self
-                .client
-                .get(url)
-                .send()
-                .await
-                .map_err(std::io::Error::other)?;
-            let bytes = resp.bytes().await.map_err(std::io::Error::other)?;
+        let bytes = tokio::task::block_in_place(move || {
+            Handle::current().block_on(async move {
+                let resp = self
+                    .client
+                    .get(url)
+                    .send()
+                    .await
+                    .map_err(std::io::Error::other)?;
+                resp.bytes().await.map_err(std::io::Error::other)
+            })
+        })?;
 
-            Ok((Some(bytes.len()), Box::new(bytes.reader()) as Box<dyn Read>))
-        })
+        Ok((Some(bytes.len()), Box::new(bytes.reader())))
     }
 }
 

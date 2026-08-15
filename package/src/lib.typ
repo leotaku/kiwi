@@ -96,7 +96,11 @@
         } else {
             ext-ref.html-link()
         }
-        link.replace(regex("/?index.html"), "/")
+        link.replace(
+            regex("/index.html$"), "/"
+        ).replace(
+            regex("^index.html$"), "."
+        )
     }
 
     show ref: it => {
@@ -134,7 +138,7 @@
     show image: it => [
         #let asset = wiki.read-asset(it.source, it)
         #asset
-        #h.img(src: asset.path, loading: "lazy")
+        #h.img(src: wiki.make-relative(asset.path), loading: "lazy")
     ]
 
     set raw(theme: none)
@@ -157,12 +161,12 @@
             #h.meta(charset: "utf-8")
             #h.meta(name: "viewport", content: "width=device-width, initial-scale=1")
             #h.title[#context title.final() | digraph.me]
-            #h.link(rel: "icon", type: "image/svg", href: favicon.path)
+            #h.link(rel: "icon", type: "image/svg", href: wiki.make-relative(favicon.path))
             #h.style(read("index.css"))
         ]
         #h.body[
             #h.header[
-                #h.a(href: "/", style: "float: right; text-decoration: none")[«]
+                #h.a(href: wiki.make-relative("/"), style: "float: right; text-decoration: none")[«]
             ]
             #h.main[
                 #body

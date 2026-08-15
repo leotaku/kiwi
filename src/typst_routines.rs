@@ -65,10 +65,7 @@ impl Page {
     #[func]
     fn html_link(&self, engine: &Engine) -> EcoString {
         let output_path = self.path.with_extension("html");
-        engine.world.main().vpath().parent().map_or_else(
-            || output_path.get_without_slash().into(),
-            |parent| output_path.relative_from(&parent),
-        )
+        relative_from_parent(&output_path, engine.world.main().vpath())
     }
 }
 
@@ -175,6 +172,18 @@ impl Wiki {
             )),
             Some(ext_ref) => Ok(ext_ref.into_value()),
         }
+    }
+
+    #[func]
+    fn make_relative(&self, engine: &Engine, path: PathOrStr) -> Result<EcoString, HintedString> {
+        let main = engine.world.main();
+
+        let resolved = path.resolve(main)?;
+        if resolved.root() != main.root() {
+            return Err("relativizing paths from outside the main root is not supported".into());
+        }
+
+        Ok(relative_from_parent(&resolved.vpath(), main.vpath()))
     }
 
     #[func]
@@ -330,5 +339,17 @@ pub fn collect_assets(wiki: &Wiki) -> Result<Vec<(VirtualPath, Bytes)>, Vec<Sour
         Ok(outputs)
     } else {
         Err(errors)
+    }
+}
+
+fn relative_from_parent(path: &VirtualPath, base: &VirtualPath) -> EcoString {
+    let relative = base
+        .parent()
+        .map_or_else(|| unreachable!(), |parent| path.relative_from(&parent));
+
+    if relative == "" && path != base {
+        ".".into()
+    } else {
+        relative
     }
 }

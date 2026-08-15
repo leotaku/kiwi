@@ -16,6 +16,7 @@ code {
   font-size: math;
 }
 pre {
+  overflow: scroll;
   font-size: large;
 }
 
@@ -36,4 +37,25 @@ section {
 
 main > :not(hr) {
   max-width: 66ch;
+}
+
+summary {
+  border: 2px outset;
+  padding-inline: 0.5ch;
+  width: fit-content;
+  user-select: none;
+}
+details[open] > summary,
+summary:active {
+  border-style: inset;
+}
+details > :not(summary) {
+  margin-block-start: 0.25rem;
+}
+
+table {
+  border-collapse: collapse;
+}
+td, th {
+  border: double;
 }

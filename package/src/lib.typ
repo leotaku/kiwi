@@ -156,7 +156,7 @@
     let favicon = asset("favicon.svg", read("favicon.svg"))
     favicon
 
-    h.html[
+    h.html(lang: "en")[
         #h.head[
             #h.meta(charset: "utf-8")
             #h.meta(name: "viewport", content: "width=device-width, initial-scale=1")

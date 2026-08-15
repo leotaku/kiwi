@@ -26,24 +26,29 @@
 
     let balance-quotes(input) = {
         let graphemes = input.clusters()
-        let windows = ((" ", graphemes.at(0)),) + graphemes.windows(2)
+        let windows = if graphemes.len() > 0 {
+            ((" ", graphemes.at(0)),) + graphemes.windows(2)
+        } else {
+            return ""
+        }
 
         let quote-rule(
             prev, char, nesting-stack,
-            rules: ("\"": ("“", "”", "″"), "'": ("‘", "’", "′"))
+            rules: ("\"": ("“", "”"), "'": ("‘", "’"))
         ) = {
             if (char not in rules) {
                 return (char, nesting-stack)
             }
 
-            let (opening, closing, math) = rules.at(char)
+            let (opening, closing) = rules.at(char)
             let opened = nesting-stack.last(default: none)
 
             if (
                 opened != char
                 and prev.contains(regex("\d"))
             ) {
-                (math, nesting-stack)
+                let prime = ("\"": "″", "'": "′").at(char)
+                (prime, nesting-stack)
             } else if (
                 char == "'"
                 and opened != char

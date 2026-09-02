@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map},
+    collections::{HashMap, hash_map::Entry},
     num::NonZeroUsize,
     sync::Arc,
 };
@@ -7,53 +7,86 @@ use std::{
 use comemo::{Track, Tracked, TrackedMut};
 use rustc_hash::FxHashMap;
 use typst::{
-    diag::{SourceResult, StrResult, error}, ecow::{EcoString, EcoVec}, engine::Engine, foundations::{
-        BundlePath, Content, Label, Output, Packed, Repr as _, Selector, StyleChain, Target,
-        TargetElem,
-    }, introspection::{
+    World,
+    diag::{SourceResult, StrResult, Warned, error},
+    ecow::{EcoString, EcoVec},
+    engine::Engine,
+    foundations::{
+        BundlePath, Bytes, Content, Label, NativeElement as _, Output, Packed, Repr as _, Selector,
+        StyleChain, Target, TargetElem,
+    },
+    introspection::{
         DocumentPosition, ElementIntrospector, ElementIntrospectorBuilder, Introspector, Location,
         Locator, SplitLocator, TagElem,
-    }, model::{DocumentElem, Numbering}, routines::{Arenas, RealizationKind}, syntax::VirtualPath,
+    },
+    model::{AssetElem, DocumentElem, LateLinkResolver, Numbering},
+    routines::{Arenas, RealizationKind},
+    syntax::{Spanned, VirtualPath},
 };
 use typst_html::HtmlDocument;
 use typst_utils::Protected;
 
-pub struct Wiki {
-    pub entries: HashMap<BundlePath, typst_html::HtmlDocument>,
+pub struct Wiki<Entry = Bytes> {
+    pub entries: HashMap<VirtualPath, Entry>,
     pub introspector: Arc<WikiIntrospector>,
 }
 
-fn with_focused_engine<'a, F, O>(engine: &'a mut Engine, document_location: Location, mut f: F) -> O
-where
-    F: FnMut(&mut Engine) -> O,
-{
-    let Engine {
-        world,
-        library,
-        introspector,
-        traced,
-        sink,
-        route,
-    } = engine;
+pub fn compile(world: &dyn World) -> Warned<SourceResult<Wiki>> {
+    let compiled = typst::compile::<Wiki<Spanned<typst_html::HtmlDocument>>>(world);
 
-    let focused_introspector = FocusedIntrospector {
-        inner: introspector.access("create focused engine").clone(),
-        ancestor: document_location,
-    };
+    compiled.map(|result| {
+        result.and_then(|mut wiki| {
+            let mut entries = HashMap::new();
+            let mut all_errors = EcoVec::new();
 
-    let mut engine = Engine {
-        world: *world,
-        library: *library,
-        introspector: Protected::new((&focused_introspector as &dyn Introspector).track()),
-        traced: *traced,
-        sink: TrackedMut::reborrow_mut(sink),
-        route: route.clone(),
-    };
+            for (out_path, document) in wiki.entries.drain() {
+                let resolver = LateLinkResolver::new(
+                    Some(&out_path),
+                    wiki.introspector.as_ref() as &dyn Introspector,
+                );
+                match typst_html::html_in_bundle(
+                    document.v.root(),
+                    &Default::default(),
+                    resolver.track(),
+                ) {
+                    Ok(text) => {
+                        entries.insert(out_path, Spanned::new(Bytes::from_string(text), document.span));
+                    }
+                    Err(errors) => all_errors.extend(errors),
+                }
+            }
 
-    f(&mut engine)
+            for elem in
+                wiki.introspector
+                    .query(&Selector::Elem(AssetElem::ELEM, None))
+                    .into_iter()
+                    .filter_map(|content| content.into_packed::<AssetElem>().ok())
+            {
+                match entries.entry(elem.path.clone().into_inner()) {
+                    Entry::Occupied(entry) => all_errors.push(error!(
+                        elem.span(), "path `{}` occurs multiple times in the bundle", elem.path.as_ref().get_without_slash();
+                        hint: "{} paths must be unique in the bundle", elem.pack_ref().func().name();
+                        hint[entry.get().span]: "path is already in use here";
+                    )),
+                    Entry::Vacant(entry) => {
+                        entry.insert(Spanned::new(elem.data.0.clone(), elem.span()));
+                    }
+                }
+            }
+
+            if all_errors.is_empty() {
+                Ok(Wiki {
+                    entries: entries.drain().map(|(path, spanned)| (path, spanned.v)).collect(),
+                    introspector: wiki.introspector,
+                })
+            } else {
+                Err(all_errors)
+            }
+        })
+    })
 }
 
-impl Output for Wiki {
+impl Output for Wiki<Spanned<typst_html::HtmlDocument>> {
     fn target() -> Target {
         Target::Bundle
     }
@@ -74,7 +107,7 @@ impl Output for Wiki {
             styles,
         )?;
 
-        let mut entries = HashMap::new();
+        let mut entries: HashMap<VirtualPath, Spanned<HtmlDocument>> = HashMap::new();
         let mut all_anchors = HashMap::new();
         let mut introspector = ElementIntrospectorBuilder::new();
 
@@ -96,16 +129,14 @@ impl Output for Wiki {
                     document_elem.location()
                 });
 
-                match entries.entry(path.clone()) {
-                    hash_map::Entry::Occupied(_entry) => engine.sink.delayed_error(error!(
-                        content.span(), "path `{}` occurs multiple times in the bundle",
-                        path.as_ref().get_without_slash();
-                        hint: "{} paths must be unique in the bundle",
-                        content.func().name();
-                        // hint[*entry.get()]: "path is already in use here";
+                match entries.entry(path.clone().into_inner()) {
+                    Entry::Occupied(entry) => engine.sink.delayed_error(error!(
+                        content.span(), "path `{}` occurs multiple times in the bundle", path.as_ref().get_without_slash();
+                        hint: "{} paths must be unique in the bundle", content.func().name();
+                        hint[entry.get().span]: "path is already in use here";
                     )),
-                    hash_map::Entry::Vacant(entry) => {
-                        entry.insert(document);
+                    Entry::Vacant(entry) => {
+                        entry.insert(Spanned::new(document, document_elem.span()));
                     }
                 }
             }
@@ -157,6 +188,36 @@ fn compile_document(
 
         Ok((document_elem.path.clone(), document, anchors))
     })
+}
+
+fn with_focused_engine<'a, F, O>(engine: &'a mut Engine, document_location: Location, mut f: F) -> O
+where
+    F: FnMut(&mut Engine) -> O,
+{
+    let Engine {
+        world,
+        library,
+        introspector,
+        traced,
+        sink,
+        route,
+    } = engine;
+
+    let focused_introspector = FocusedIntrospector {
+        inner: introspector.access("create focused engine").clone(),
+        ancestor: document_location,
+    };
+
+    let mut engine = Engine {
+        world: *world,
+        library: *library,
+        introspector: Protected::new((&focused_introspector as &dyn Introspector).track()),
+        traced: *traced,
+        sink: TrackedMut::reborrow_mut(sink),
+        route: route.clone(),
+    };
+
+    f(&mut engine)
 }
 
 pub struct GlobalIndicator;

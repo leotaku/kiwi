@@ -2,7 +2,7 @@ mod typst_routines_2;
 mod typst_wiki;
 mod typst_world_2;
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -13,7 +13,6 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
-use comemo::Track as _;
 use notify::{Event, EventKind, Watcher as _};
 use tokio::sync::RwLock;
 use tower::ServiceExt as _;
@@ -23,13 +22,15 @@ use tracing::{info, trace, warn};
 use typst::{
     Features, Library, LibraryExt as _,
     foundations::{Dict, IntoValue as _},
-    introspection::Introspector,
-    model::LateLinkResolver,
     syntax::VirtualPath,
 };
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 
-use crate::{typst_routines_2::WikiScope, typst_wiki::Wiki, typst_world_2::ReusableContext};
+use crate::{
+    typst_routines_2::WikiScope,
+    typst_wiki::Wiki,
+    typst_world_2::{AutoIncludeWorld, ReusableContext},
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -86,8 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
     let context = ReusableContext::new(args.directory);
 
-    let mut pages = compile_to_memory(Arc::new(context));
-    for (path, contents) in pages.drain() {
+    let pages = compile_to_memory(Arc::new(context))
+        .map(|wiki| wiki.entries)
+        .unwrap_or_default();
+    for (path, contents) in pages {
         let path = path.realize(&args.output)?;
         path.parent().and_then(|p| std::fs::create_dir_all(p).ok());
         std::fs::write(path, contents)?
@@ -99,7 +102,7 @@ fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
 async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     let mut context = ReusableContext::new(args.directory);
 
-    let pages = Arc::new(RwLock::new(HashMap::<VirtualPath, Vec<u8>>::new()));
+    let pages = Arc::new(RwLock::new(None));
 
     let (send, mut recv) = tokio::sync::mpsc::channel(100);
     send.send(Event::new(EventKind::Other)).await.ok();
@@ -130,9 +133,9 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
             let context_arc = Arc::new(context);
             *pages.write().await = compile_to_memory(context_arc.clone());
             if let Some(ref index_path) = args.index {
-                generate_typst_index(context_arc.directory(), index_path).unwrap_or_else(|err| {
-                    warn!("could not write LSP index file: {}", err.to_string())
-                })
+                generate_typst_index(pages.read().await.as_ref(), index_path).unwrap_or_else(
+                    |err| warn!("could not write LSP index file: {}", err.to_string()),
+                )
             }
             reloader.reload();
             info!("reload");
@@ -170,7 +173,7 @@ async fn add_cache_headers(mut rsp: Response) -> Response {
     rsp
 }
 
-type AppState = State<(Arc<RwLock<HashMap<VirtualPath, Vec<u8>>>>, Option<ServeDir>)>;
+type AppState = State<(Arc<RwLock<Option<Wiki>>>, Option<ServeDir>)>;
 
 async fn handler_with_servedir<T: Send + 'static>(
     State((pages, serve_dir)): AppState,
@@ -185,17 +188,19 @@ async fn handler_with_servedir<T: Send + 'static>(
 }
 
 #[expect(clippy::result_large_err)]
-async fn handler(
-    uri: &axum::http::Uri,
-    pages: &HashMap<VirtualPath, Vec<u8>>,
-) -> Result<Response, Response> {
-    let path = VirtualPath::new(uri.path()).map_err(|_| {
-        (
-            http::StatusCode::INTERNAL_SERVER_ERROR,
-            axum::response::Html("<code>weird path error</code>"),
-        )
-            .into_response()
-    })?;
+async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response, Response> {
+    let pages = match wiki {
+        Some(wiki) => &wiki.entries,
+        None => {
+            return Err((
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Html("<code>compilation error</code>"),
+            )
+                .into_response());
+        }
+    };
+
+    let path = VirtualPath::new(uri.path()).map_err(|_| todo!())?;
 
     let (path, content) = pages
         .get_key_value(&path)
@@ -215,13 +220,13 @@ async fn handler(
     let content_type = mime_guess::from_path(path.get_with_slash()).first_or_octet_stream();
     let response = (
         [(http::header::CONTENT_TYPE, content_type.as_ref())],
-        content.clone(),
+        content.to_vec(),
     );
 
     Ok(response.into_response())
 }
 
-fn compile_to_memory(context: Arc<ReusableContext>) -> HashMap<VirtualPath, Vec<u8>> {
+fn compile_to_memory(context: Arc<ReusableContext>) -> Option<Wiki> {
     let mut stream = StandardStream::stderr(Default::default());
 
     let mut diagnostics = Vec::new();
@@ -235,35 +240,16 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> HashMap<VirtualPath, Vec<
         .build()
         .into();
 
-    let world = typst_world_2::AutoIncludeWorld::new(context, library);
-    let warned = typst::compile::<typst_wiki::Wiki>(&world);
+    let world = AutoIncludeWorld::new(context, library);
+    let warned = typst_wiki::compile(&world);
     diagnostics.extend(warned.warnings);
 
-    let mut pages = HashMap::new();
-    match warned.output {
-        Ok(wiki) => {
-            let Wiki {
-                mut entries,
-                introspector,
-            } = wiki;
-            for (out_path, document) in entries.drain() {
-                let resolver = LateLinkResolver::new(
-                    Some(out_path.as_ref()),
-                    introspector.as_ref() as &dyn Introspector,
-                );
-                match typst_html::html_in_bundle(
-                    document.root(),
-                    &Default::default(),
-                    resolver.track(),
-                ) {
-                    Ok(text) => {
-                        pages.insert(out_path.into_inner(), text.into_bytes());
-                    }
-                    Err(errors) => diagnostics.extend(errors),
-                }
-            }
+    let result = match warned.output {
+        Ok(wiki) => Some(wiki),
+        Err(errors) => {
+            diagnostics.extend(errors);
+            None
         }
-        Err(errors) => diagnostics.extend(errors),
     };
 
     typst_kit::diagnostics::emit(
@@ -277,12 +263,9 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> HashMap<VirtualPath, Vec<
     )
     .unwrap_or_else(|_| todo!());
 
-    pages
+    result
 }
 
-fn generate_typst_index(
-    _root_path: &std::path::Path,
-    _index_path: &std::path::Path,
-) -> std::io::Result<()> {
+fn generate_typst_index(wiki: Option<&Wiki>, index_path: &std::path::Path) -> std::io::Result<()> {
     todo!()
 }

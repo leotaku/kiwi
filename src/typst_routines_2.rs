@@ -1,17 +1,9 @@
 use comemo::Tracked;
 use rustc_hash::{FxHashMap, FxHashSet};
 use typst::{
-    World as _,
-    diag::{HintedString, Severity, SourceDiagnostic, error},
-    ecow::{EcoString, EcoVec},
-    engine::Engine,
-    foundations::{
-        BundlePath, Bytes, Content, Context, IntoValue as _, Label, LocatableSelector,
-        NativeElement as _, PathOrStr, Repr, Selector, Value, eco_format,
-    },
-    introspection::{Introspector, QueryIntrospection},
-    model::{AssetData, AssetElem, DocumentElem},
-    syntax::{Spanned, VirtualPath, VirtualRoot},
+    World as _, diag::{HintedString, Severity, SourceDiagnostic, error}, ecow::{EcoString, EcoVec}, engine::Engine, foundations::{
+        BundlePath, Bytes, Content, Context, IntoValue as _, Label, LocatableSelector, NativeElement as _, PathOrStr, Repr, Selector, Str, Value, eco_format,
+    }, introspection::{Introspector, QueryIntrospection}, model::{AssetData, AssetElem, DocumentElem}, syntax::{Spanned, VirtualPath, VirtualRoot},
 };
 use typst_macros::func;
 
@@ -103,9 +95,9 @@ impl WikiScope {
     }
 
     #[func]
-    fn path_of(&self, anchor: Content) -> Result<Value, HintedString> {
+    fn path_of(&self, anchor: Content) -> Result<Str, HintedString> {
         let file_id = anchor.span().id().ok_or("the containing file is unknown")?;
-        Ok(PathOrStr::Path(file_id.get().to_owned()).into_value())
+        Ok(file_id.get().vpath().get_with_slash().into())
     }
 
     #[func]
@@ -114,7 +106,7 @@ impl WikiScope {
     }
 }
 
-pub fn collect_document_paths(introspector: impl Introspector) -> FxHashSet<VirtualPath> {
+pub fn collect_document_paths<I: Introspector>(introspector: &I) -> FxHashSet<VirtualPath> {
     introspector
         .query(&Selector::Elem(DocumentElem::ELEM, None))
         .into_iter()
@@ -129,9 +121,9 @@ pub fn collect_document_paths(introspector: impl Introspector) -> FxHashSet<Virt
         .collect()
 }
 
-pub fn collect_assets(
-    introspector: impl Introspector,
-) -> Result<Vec<(VirtualPath, Bytes)>, Vec<SourceDiagnostic>> {
+pub fn collect_assets<I: Introspector>(
+    introspector: &I,
+) -> Result<Vec<(BundlePath, Bytes)>, Vec<SourceDiagnostic>> {
     let mut potential_outputs = FxHashMap::default();
 
     for (span, asset) in introspector
@@ -141,7 +133,7 @@ pub fn collect_assets(
         .map(|packed| (packed.span(), packed.unpack()))
     {
         potential_outputs
-            .entry(asset.path.into_inner())
+            .entry(asset.path)
             .or_insert_with(Vec::new)
             .push((span, asset.data));
     }
@@ -162,7 +154,7 @@ pub fn collect_assets(
                 span: first_span.into(),
                 message: eco_format!(
                     r#"multiple conflicting assets for output "{}""#,
-                    path.get_with_slash()
+                    path.as_ref().get_with_slash()
                 ),
                 trace: Default::default(),
                 hints: conflict_messages,

@@ -1,5 +1,6 @@
-mod typst_routines;
-mod typst_world;
+mod typst_routines_2;
+mod typst_wiki;
+mod typst_world_2;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -12,20 +13,23 @@ use axum::{
     routing::get,
 };
 use clap::Parser;
+use comemo::Track as _;
 use notify::{Event, EventKind, Watcher as _};
 use tokio::sync::RwLock;
 use tower::ServiceExt as _;
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
 use tracing::{info, trace, warn};
-use typst::{Library, LibraryExt as _, syntax::VirtualPath, utils::LazyHash};
-use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
-use walkdir::WalkDir;
-
-use crate::{
-    typst_routines::Wiki,
-    typst_world::{GlobalContext, TemporaryWorld},
+use typst::{
+    Features, Library, LibraryExt as _,
+    foundations::{Dict, IntoValue as _},
+    introspection::Introspector,
+    model::LateLinkResolver,
+    syntax::VirtualPath,
 };
+use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
+
+use crate::{typst_routines_2::WikiScope, typst_wiki::Wiki, typst_world_2::ReusableContext};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -80,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
-    let context = GlobalContext::new(args.directory);
+    let context = ReusableContext::new(args.directory);
 
     let mut pages = compile_to_memory(Arc::new(context));
     for (path, contents) in pages.drain() {
@@ -93,7 +97,7 @@ fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
-    let mut context = GlobalContext::new(args.directory);
+    let mut context = ReusableContext::new(args.directory);
 
     let pages = Arc::new(RwLock::new(HashMap::<VirtualPath, Vec<u8>>::new()));
 
@@ -217,63 +221,57 @@ async fn handler(
     Ok(response.into_response())
 }
 
-fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, Vec<u8>> {
+fn compile_to_memory(context: Arc<ReusableContext>) -> HashMap<VirtualPath, Vec<u8>> {
     let mut stream = StandardStream::stderr(Default::default());
 
-    let paths = WalkDir::new(context.directory())
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.path().extension().is_some_and(|ext| ext == "typ")
-                && entry.metadata().is_ok_and(|m| m.is_file())
-                && !path_is_hidden(entry.path())
-        })
-        .filter_map(|entry| VirtualPath::virtualize(context.directory(), entry.path()).ok());
+    let mut diagnostics = Vec::new();
 
-    let mut wiki = typst_routines::render_wiki(Wiki::from_paths(paths), &context);
-    for _ in 0..1 {
-        if wiki
-            .diagnostics()
-            .any(|diag| diag.severity == typst::diag::Severity::Error)
-        {
-            break;
-        }
-        wiki = typst_routines::render_wiki(wiki, &context);
-    }
+    let mut inputs = Dict::new();
+    inputs.insert("x-wiki".into(), WikiScope.into_value());
+
+    let library = Library::builder()
+        .with_features(Features::all())
+        .with_inputs(inputs)
+        .build()
+        .into();
+
+    let world = typst_world_2::AutoIncludeWorld::new(context, library);
+    let warned = typst::compile::<typst_wiki::Wiki>(&world);
+    diagnostics.extend(warned.warnings);
 
     let mut pages = HashMap::new();
-    let mut diagnostics: Vec<_> = wiki.diagnostics().cloned().collect();
-
-    for (path, document) in wiki.pages() {
-        let out_path = path.with_extension("html");
-        match typst_html::html(document, &Default::default()) {
-            Ok(text) => {
-                pages.insert(out_path, text.into_bytes());
+    match warned.output {
+        Ok(wiki) => {
+            let Wiki {
+                mut entries,
+                introspector,
+            } = wiki;
+            for (out_path, document) in entries.drain() {
+                let resolver = LateLinkResolver::new(
+                    Some(out_path.as_ref()),
+                    introspector.as_ref() as &dyn Introspector,
+                );
+                match typst_html::html_in_bundle(
+                    document.root(),
+                    &Default::default(),
+                    resolver.track(),
+                ) {
+                    Ok(text) => {
+                        pages.insert(out_path.into_inner(), text.into_bytes());
+                    }
+                    Err(errors) => diagnostics.extend(errors),
+                }
             }
-            Err(errs) => diagnostics.extend(errs),
         }
-    }
-
-    match typst_routines::collect_assets(&wiki) {
-        Ok(resources) => {
-            for (path, content) in resources {
-                pages.insert(path, content.into_vec());
-            }
-        }
-        Err(errs) => diagnostics.extend(errs),
-    }
-
-    let diagnostic_world = TemporaryWorld {
-        main: &VirtualPath::new(".").unwrap_or_else(|_| unreachable!()),
-        context: &context,
-        library: &LazyHash::new(Library::default()),
+        Err(errors) => diagnostics.extend(errors),
     };
 
     typst_kit::diagnostics::emit(
         &mut stream,
-        &diagnostic_world,
+        &world,
         diagnostics.iter().filter(|diag| {
             diag.message != "html export is under active development and incomplete"
+                && diag.message != "bundle export is experimental"
         }),
         DiagnosticFormat::Human,
     )
@@ -283,35 +281,8 @@ fn compile_to_memory(context: Arc<GlobalContext>) -> HashMap<VirtualPath, Vec<u8
 }
 
 fn generate_typst_index(
-    root_path: &std::path::Path,
-    index_path: &std::path::Path,
+    _root_path: &std::path::Path,
+    _index_path: &std::path::Path,
 ) -> std::io::Result<()> {
-    let index_path_parent = index_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new(".."));
-
-    let paths = WalkDir::new(root_path)
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.path().extension().is_some_and(|ext| ext == "typ")
-                && entry.metadata().is_ok_and(|m| m.is_file())
-                && !path_is_hidden(entry.path())
-        })
-        .filter_map(|entry| VirtualPath::virtualize(index_path_parent, entry.path()).ok());
-
-    let mut include_statements: Vec<_> = paths
-        .map(|path| format!(r#"#include("{}")"#, path.get_without_slash()))
-        .collect();
-    include_statements.insert(0, r#"#set heading(numbering: "1.")"#.to_owned());
-    include_statements.push("".to_owned());
-
-    std::fs::write(index_path, include_statements.join("\n"))?;
-
-    Ok(())
-}
-
-fn path_is_hidden(path: &std::path::Path) -> bool {
-    path.iter()
-        .any(|segment| segment.as_encoded_bytes().starts_with(".".as_ref()))
+    todo!()
 }

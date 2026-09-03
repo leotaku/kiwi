@@ -1,7 +1,6 @@
 use std::{
-    cell::LazyCell,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use bytes::Buf as _;
@@ -22,8 +21,8 @@ use typst_kit::{
 };
 use walkdir::WalkDir;
 
-const VIRTUAL_MAIN: LazyCell<FileId> = LazyCell::new(|| {
-    FileId::new(RootedPath::new(
+static VIRTUAL_MAIN: LazyLock<FileId> = LazyLock::new(|| {
+    FileId::unique(RootedPath::new(
         VirtualRoot::Project,
         VirtualPath::new("virtual").unwrap_or_else(|_| unreachable!()),
     ))

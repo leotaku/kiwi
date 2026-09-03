@@ -69,11 +69,12 @@ impl WikiScope {
         context: Tracked<Context>,
         selector: Spanned<Selector>,
     ) -> Result<Vec<Content>, HintedString> {
+        context.introspect()?;
+
         let global_selector = selector
             .v
             .within(LocatableSelector(Selector::can::<GlobalQueryMarker>()));
 
-        context.introspect()?;
         Ok(engine
             .introspect(QueryIntrospection(global_selector, selector.span))
             .into_iter()
@@ -142,18 +143,27 @@ impl WikiScope {
     }
 
     #[func]
-    fn document_at(&self, engine: &mut Engine, location: Spanned<Location>) -> Option<Content> {
-        let document_location =
-            engine.introspect(DocumentIntrospection(location.v, location.span))?;
-        let document = engine
-            .introspect(QueryUniqueIntrospection(
-                Selector::Location(document_location)
-                    .within(LocatableSelector(Selector::can::<GlobalQueryMarker>())),
-                location.span,
-            ))
-            .unwrap_or_else(|_| unreachable!());
+    fn document_at(
+        &self,
+        engine: &mut Engine,
+        context: Tracked<Context>,
+        location: Spanned<Location>,
+    ) -> Result<Option<Content>, HintedString> {
+        context.introspect()?;
 
-        Some(document)
+        let document = engine
+            .introspect(DocumentIntrospection(location.v, location.span))
+            .map(|document_location| {
+                engine
+                    .introspect(QueryUniqueIntrospection(
+                        Selector::Location(document_location)
+                            .within(LocatableSelector(Selector::can::<GlobalQueryMarker>())),
+                        location.span,
+                    ))
+                    .unwrap_or_else(|_| unreachable!())
+            });
+
+        Ok(document)
     }
 
     #[func]

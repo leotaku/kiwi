@@ -19,7 +19,7 @@ use typst_macros::func;
 
 use crate::typst_wiki::GlobalQueryMarker;
 
-pub static HIDE_ASSETS_RECIPE: LazyLock<Recipe> = LazyLock::new(|| {
+pub static HIDE_ASSET_RECIPE: LazyLock<Recipe> = LazyLock::new(|| {
     Recipe::new(
         Some(AssetElem::ELEM.select()),
         Transformation::Content(Content::empty()),

@@ -241,7 +241,7 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Option<Wiki> {
         .with_features(Features::all())
         .with_inputs(inputs)
         .build();
-    library.styles.push(typst_addons::HIDE_ASSETS_RECIPE.clone());
+    library.styles.push(typst_addons::HIDE_ASSET_RECIPE.clone());
 
     let world = AutoIncludeWorld::new(context, library.into());
     let warned = typst_wiki::compile(&world);

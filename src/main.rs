@@ -192,18 +192,21 @@ async fn handler_with_servedir<T: Send + 'static>(
 
 #[expect(clippy::result_large_err)]
 async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response, Response> {
-    let pages = match wiki {
-        Some(wiki) => &wiki.entries,
-        None => {
-            return Err((
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                axum::response::Html("<code>compilation error</code>"),
-            )
-                .into_response());
-        }
-    };
+    let pages = wiki.as_ref().map(|wiki| &wiki.entries).ok_or_else(|| {
+        (
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::response::Html("<code>compilation error</code>"),
+        )
+            .into_response()
+    })?;
 
-    let path = VirtualPath::new(uri.path()).map_err(|_| todo!())?;
+    let path = VirtualPath::new(uri.path()).map_err(|_| {
+        (
+            http::StatusCode::BAD_REQUEST,
+            axum::response::Html("<code>malformed uri</code>"),
+        )
+            .into_response()
+    })?;
 
     let (path, content) = pages
         .get_key_value(&path)

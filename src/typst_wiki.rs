@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use comemo::{Track, Tracked, TrackedMut};
+use comemo::{Track as _, Tracked, TrackedMut};
 use rustc_hash::FxHashMap;
 use typst::{
     World,

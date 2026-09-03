@@ -8,7 +8,7 @@ use tokio::runtime::Handle;
 use typst::{
     Library,
     diag::FileResult,
-    foundations::{Bytes, Datetime, Duration, Repr},
+    foundations::{Bytes, Datetime, Duration, Repr as _},
     syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot},
     text::{Font, FontBook},
     utils::LazyHash,

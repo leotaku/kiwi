@@ -4,7 +4,7 @@ use comemo::Tracked;
 use rustc_hash::FxHashSet;
 use typst::{
     World as _,
-    diag::{HintedString, error},
+    diag::{HintedStrResult, HintedString, error},
     ecow::EcoString,
     engine::Engine,
     foundations::{
@@ -68,7 +68,7 @@ impl WikiScope {
         engine: &mut Engine,
         context: Tracked<Context>,
         selector: Spanned<Selector>,
-    ) -> Result<Vec<Content>, HintedString> {
+    ) -> HintedStrResult<Vec<Content>> {
         context.introspect()?;
 
         let global_selector = selector
@@ -87,7 +87,7 @@ impl WikiScope {
         engine: &mut Engine,
         context: Tracked<Context>,
         label: Spanned<Label>,
-    ) -> Result<Value, HintedString> {
+    ) -> HintedStrResult<Value> {
         let mut queried = self.query(
             engine,
             context,
@@ -116,7 +116,7 @@ impl WikiScope {
         engine: &Engine,
         path: Spanned<PathOrStr>,
         #[default] anchor: Option<Content>,
-    ) -> Result<Value, HintedString> {
+    ) -> HintedStrResult<Value> {
         let anchor_span = anchor
             .map(|content| content.span())
             .unwrap_or_else(|| path.span);
@@ -137,7 +137,7 @@ impl WikiScope {
     }
 
     #[func]
-    fn input_of(&self, anchor: Content) -> Result<Str, HintedString> {
+    fn input_of(&self, anchor: Content) -> HintedStrResult<Str> {
         let file_id = anchor.span().id().ok_or("the containing file is unknown")?;
         Ok(file_id.get().vpath().get_with_slash().into())
     }
@@ -148,7 +148,7 @@ impl WikiScope {
         engine: &mut Engine,
         context: Tracked<Context>,
         location: Spanned<Location>,
-    ) -> Result<Option<Content>, HintedString> {
+    ) -> HintedStrResult<Option<Content>> {
         context.introspect()?;
 
         let document = engine
@@ -167,7 +167,7 @@ impl WikiScope {
     }
 
     #[func]
-    fn make_relative(&self, path: Str, base: Str) -> Result<EcoString, HintedString> {
+    fn make_relative(&self, path: Str, base: Str) -> HintedStrResult<EcoString> {
         let path = VirtualPath::new(path.clone())
             .map_err(|err| format_resolve_error(err, &VirtualRoot::Project, &path))?;
         let base = VirtualPath::new(base.clone())
@@ -177,7 +177,7 @@ impl WikiScope {
     }
 
     #[func]
-    fn register_for_index(&self, path: Str) -> Result<Value, HintedString> {
+    fn register_for_index(&self, path: Str) -> HintedStrResult<Value> {
         let path = VirtualPath::new(path.clone())
             .map_err(|err| format_resolve_error(err, &VirtualRoot::Project, &path))?;
         Ok(MetadataElem::new(IndexMarker(path).into_value()).into_value())

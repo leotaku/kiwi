@@ -1,6 +1,6 @@
-mod typst_routines_2;
+mod typst_addons;
 mod typst_wiki;
-mod typst_world_2;
+mod typst_world;
 
 use std::sync::Arc;
 
@@ -30,9 +30,9 @@ use typst::{
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 
 use crate::{
-    typst_routines_2::WikiScope,
+    typst_addons::WikiScope,
     typst_wiki::Wiki,
-    typst_world_2::{AutoIncludeWorld, ReusableContext},
+    typst_world::{AutoIncludeWorld, ReusableContext},
 };
 
 #[derive(Parser)]
@@ -290,7 +290,7 @@ fn generate_typst_index(
         .parent()
         .unwrap_or_else(|| std::path::Path::new(".."));
 
-    let paths = typst_routines_2::collect_index_paths(&*wiki.introspector)
+    let paths = typst_addons::collect_index_paths(&*wiki.introspector)
         .into_iter()
         .filter_map(|path| path.realize(root_path).ok())
         .filter_map(|path| VirtualPath::virtualize(index_path_parent, &path).ok());

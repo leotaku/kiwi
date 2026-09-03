@@ -1,11 +1,15 @@
-use std::path::{Path, PathBuf};
+use std::{
+    cell::LazyCell,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use bytes::Buf as _;
 use tokio::runtime::Handle;
 use typst::{
     Library,
     diag::FileResult,
-    foundations::{Bytes, Datetime, Duration},
+    foundations::{Bytes, Datetime, Duration, Repr},
     syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot},
     text::{Font, FontBook},
     utils::LazyHash,
@@ -16,6 +20,14 @@ use typst_kit::{
     fonts::FontStore,
     packages::SystemPackages,
 };
+use walkdir::WalkDir;
+
+const VIRTUAL_MAIN: LazyCell<FileId> = LazyCell::new(|| {
+    FileId::new(RootedPath::new(
+        VirtualRoot::Project,
+        VirtualPath::new("virtual").unwrap_or_else(|_| unreachable!()),
+    ))
+});
 
 struct Downloader {
     client: reqwest::Client,
@@ -43,19 +55,36 @@ impl typst_kit::downloader::Downloader for Downloader {
     }
 }
 
-pub struct TemporaryWorld<'main, 'context, 'library> {
-    pub main: &'main VirtualPath,
-    pub context: &'context GlobalContext,
-    pub library: &'library LazyHash<Library>,
+pub struct AutoIncludeWorld {
+    context: Arc<ReusableContext>,
+    library: LazyHash<Library>,
+    virtual_main_content: String,
 }
 
-pub struct GlobalContext {
+fn find_typst_paths(root_path: &Path) -> impl Iterator<Item = VirtualPath> {
+    WalkDir::new(root_path)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.path().extension().is_some_and(|ext| ext == "typ")
+                && entry.metadata().is_ok_and(|m| m.is_file())
+                && !path_is_hidden(entry.path())
+        })
+        .filter_map(|entry| VirtualPath::virtualize(root_path, entry.path()).ok())
+}
+
+fn path_is_hidden(path: &std::path::Path) -> bool {
+    path.iter()
+        .any(|segment| segment.as_encoded_bytes().starts_with(".".as_ref()))
+}
+
+pub struct ReusableContext {
     root: PathBuf,
     fonts: FontStore,
     files: FileStore<SystemFiles>,
 }
 
-impl GlobalContext {
+impl ReusableContext {
     pub fn new(root: PathBuf) -> Self {
         let mut fonts = FontStore::new();
         fonts.extend(typst_kit::fonts::embedded());
@@ -80,9 +109,23 @@ impl GlobalContext {
     }
 }
 
-impl typst::World for TemporaryWorld<'_, '_, '_> {
+impl AutoIncludeWorld {
+    pub fn new(context: Arc<ReusableContext>, library: LazyHash<Library>) -> Self {
+        let virtual_main_content = find_typst_paths(context.directory())
+            .map(|path| format!("#include {}\n", path.get_with_slash().repr()))
+            .collect::<String>();
+
+        Self {
+            context,
+            library,
+            virtual_main_content,
+        }
+    }
+}
+
+impl typst::World for AutoIncludeWorld {
     fn library(&self) -> &LazyHash<Library> {
-        self.library
+        &self.library
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
@@ -90,14 +133,20 @@ impl typst::World for TemporaryWorld<'_, '_, '_> {
     }
 
     fn main(&self) -> FileId {
-        FileId::new(RootedPath::new(VirtualRoot::Project, self.main.clone()))
+        *VIRTUAL_MAIN
     }
 
     fn source(&self, id: FileId) -> FileResult<Source> {
+        if id == *VIRTUAL_MAIN {
+            return Ok(Source::new(id, self.virtual_main_content.clone()));
+        }
         self.context.files.source(id)
     }
 
     fn file(&self, id: FileId) -> FileResult<Bytes> {
+        if id == *VIRTUAL_MAIN {
+            return Ok(Bytes::from_string(self.virtual_main_content.clone()));
+        }
         self.context.files.file(id)
     }
 
@@ -110,7 +159,7 @@ impl typst::World for TemporaryWorld<'_, '_, '_> {
     }
 }
 
-impl typst_kit::diagnostics::DiagnosticWorld for TemporaryWorld<'_, '_, '_> {
+impl typst_kit::diagnostics::DiagnosticWorld for AutoIncludeWorld {
     fn name(&self, id: FileId) -> String {
         id.vpath().get_without_slash().to_string()
     }

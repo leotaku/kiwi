@@ -13,6 +13,7 @@ use typst::{
     },
     introspection::{
         DocumentIntrospection, Introspector, Location, MetadataElem, QueryIntrospection,
+        QueryUniqueIntrospection,
     },
     model::{AssetData, AssetElem},
     syntax::{Span, Spanned, VirtualPath},
@@ -141,8 +142,18 @@ impl WikiScope {
     }
 
     #[func]
-    fn document_at(&self, engine: &mut Engine, location: Spanned<Location>) -> Option<Location> {
-        engine.introspect(DocumentIntrospection(location.v, location.span))
+    fn document_at(&self, engine: &mut Engine, location: Spanned<Location>) -> Option<Content> {
+        let document_location =
+            engine.introspect(DocumentIntrospection(location.v, location.span))?;
+        let document = engine
+            .introspect(QueryUniqueIntrospection(
+                Selector::Location(document_location)
+                    .within(LocatableSelector(Selector::can::<GlobalQueryMarker>())),
+                location.span,
+            ))
+            .unwrap_or_else(|_| unreachable!());
+
+        Some(document)
     }
 
     #[func]

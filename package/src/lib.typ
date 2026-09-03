@@ -104,8 +104,8 @@
 
         let elem = wiki.query-label(it.target)
         if elem.func() == heading and elem.level <= 1 {
-            let document-location = wiki.document-at(elem.location())
-            link(document-location, elem.body)
+            let document = wiki.document-at(elem.location())
+            link(document.location(), elem.body)
         } else {
             link(elem.location(), elem.body)
         }
@@ -120,8 +120,8 @@
 
         let elem = wiki.query-label(it.dest)
         if elem.func() == heading and elem.level <= 1 {
-            let document-location = wiki.document-at(elem.location())
-            link(document-location, elem.body)
+            let document = wiki.document-at(elem.location())
+            link(document.location(), elem.body)
         } else {
             link(elem.location(), elem.body)
         }

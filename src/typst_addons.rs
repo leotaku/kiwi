@@ -16,7 +16,7 @@ use typst::{
         QueryUniqueIntrospection,
     },
     model::{AssetData, AssetElem},
-    syntax::{Span, Spanned, VirtualPath},
+    syntax::{PathError, Span, Spanned, VirtualPath, VirtualRoot},
 };
 use typst_macros::func;
 
@@ -168,18 +168,19 @@ impl WikiScope {
 
     #[func]
     fn make_relative(&self, path: Str, base: Str) -> Result<EcoString, HintedString> {
-        let path = VirtualPath::new(path).unwrap();
-        let base = VirtualPath::new(base).unwrap();
+        let path = VirtualPath::new(path.clone())
+            .map_err(|err| format_resolve_error(err, &VirtualRoot::Project, &path))?;
+        let base = VirtualPath::new(base.clone())
+            .map_err(|err| format_resolve_error(err, &VirtualRoot::Project, &base))?;
 
         Ok(relative_from_parent(&path, &base))
     }
 
     #[func]
     fn register_for_index(&self, path: Str) -> Result<Value, HintedString> {
-        Ok(MetadataElem::new(
-            IndexMarker(VirtualPath::new(path).unwrap_or_else(|_| todo!())).into_value(),
-        )
-        .into_value())
+        let path = VirtualPath::new(path.clone())
+            .map_err(|err| format_resolve_error(err, &VirtualRoot::Project, &path))?;
+        Ok(MetadataElem::new(IndexMarker(path).into_value()).into_value())
     }
 }
 
@@ -192,5 +193,33 @@ fn relative_from_parent(path: &VirtualPath, base: &VirtualPath) -> EcoString {
         ".".into()
     } else {
         relative
+    }
+}
+
+// This function has been copied one-to-one from the following location:
+// `typst-library-0.15.1/src/foundations/path.rs:227`
+fn format_resolve_error(err: PathError, root: &VirtualRoot, path: &str) -> HintedString {
+    match err {
+        PathError::Escapes => {
+            let kind = match root {
+                VirtualRoot::Project => "project",
+                VirtualRoot::Package(_) => "package",
+            };
+            let mut diag = error!(
+                "path `{}` would escape the {kind} root", path.repr();
+                hint: "cannot access files outside of the {kind} sandbox";
+            );
+            if *root == VirtualRoot::Project {
+                diag.hint("you can adjust the project root with the `--root` argument");
+            }
+            diag
+        }
+        PathError::Backslash => error!(
+            "path must not contain a backslash";
+            hint: "use forward slashes instead: `{}`",
+            path.replace("\\", "/").repr();
+            hint: "in earlier Typst versions, backslashes indicated path separators on Windows";
+            hint: "this behavior is no longer supported as it is not portable";
+        ),
     }
 }

@@ -201,7 +201,7 @@ fn compile_document(
     })
 }
 
-fn with_focused_engine<'a, F, O>(engine: &'a mut Engine, document_location: Location, mut f: F) -> O
+fn with_focused_engine<F, O>(engine: &mut Engine, document_location: Location, mut f: F) -> O
 where
     F: FnMut(&mut Engine) -> O,
 {
@@ -215,13 +215,13 @@ where
     } = engine;
 
     let focused_introspector = FocusedIntrospector {
-        inner: introspector.access("create focused engine").clone(),
+        inner: *introspector.access("create focused engine"),
         ancestor: document_location,
     };
 
     let mut engine = Engine {
         world: *world,
-        library: *library,
+        library,
         introspector: Protected::new((&focused_introspector as &dyn Introspector).track()),
         traced: *traced,
         sink: TrackedMut::reborrow_mut(sink),
@@ -238,7 +238,7 @@ pub struct WikiIntrospector {
     anchors: HashMap<Location, EcoString>,
 }
 
-const EMPTY_STRING: &'static EcoString = &EcoString::inline("");
+const EMPTY_STRING: &EcoString = &EcoString::inline("");
 
 impl Introspector for WikiIntrospector {
     fn query(&self, selector: &Selector) -> EcoVec<Content> {

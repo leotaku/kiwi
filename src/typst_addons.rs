@@ -1,4 +1,4 @@
-use std::cell::LazyCell;
+use std::sync::LazyLock;
 
 use comemo::Tracked;
 use rustc_hash::FxHashSet;
@@ -9,7 +9,7 @@ use typst::{
     engine::Engine,
     foundations::{
         BundlePath, Content, Context, IntoValue as _, Label, LocatableSelector, NativeElement as _,
-        PathOrStr, Recipe, Repr, Selector, Str, Style, Transformation, Value, eco_format,
+        PathOrStr, Recipe, Repr, Selector, Str, Transformation, Value, eco_format,
     },
     introspection::{Introspector, Location, MetadataElem, QueryIntrospection},
     model::{AssetData, AssetElem},
@@ -19,13 +19,12 @@ use typst_macros::func;
 
 use crate::typst_wiki::GlobalQueryMarker;
 
-pub const HIDE_ASSETS_STYLE: LazyCell<Style> = LazyCell::new(|| {
+pub static HIDE_ASSETS_RECIPE: LazyLock<Recipe> = LazyLock::new(|| {
     Recipe::new(
         Some(AssetElem::ELEM.select()),
         Transformation::Content(Content::empty()),
         Span::detached(),
     )
-    .into()
 });
 
 #[typst_macros::ty]
@@ -170,7 +169,7 @@ fn relative_from_parent(path: &VirtualPath, base: &VirtualPath) -> EcoString {
         .parent()
         .map_or_else(|| unreachable!(), |parent| path.relative_from(&parent));
 
-    if relative == "" && path != base {
+    if relative.is_empty() && path != base {
         ".".into()
     } else {
         relative

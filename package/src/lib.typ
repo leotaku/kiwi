@@ -79,8 +79,11 @@
     balance-quotes(flatten(content))
 }
 
-#let page(body) = if "x-wiki" in sys.inputs {
+#let page(publish: true, body) = if "x-wiki" in sys.inputs {
     let h = html
+
+    let in-path = wiki.input-of(body.children.first())
+    let out-path = in-path.replace(regex(".typ$"), ".html")
 
     let title = state("kiwi-page-title", none)
     show heading: it => {
@@ -94,32 +97,17 @@
         numbering("1.",..it.pos().slice(1))
     })
 
-    let html-link = ext-ref => {
-        let elem = ext-ref.element
-        let link = if elem.func() == heading and elem.level <= 1 {
-            ext-ref.page.html-link()
-        } else {
-            ext-ref.html-link()
-        }
-        link.replace(
-            regex("/index.html$"), "/"
-        ).replace(
-            regex("^index.html$"), "."
-        )
-    }
-
     show ref: it => {
         if query(it.target).len() > 0 {
             return it
         }
 
-        let queried = wiki.query-label(it.target)
-        if queried == none {
-            h.code([UNRESOLVED])
-        } else if queried.func() == ext-ref {
-            h.a(href: html-link(queried), queried.element.body)
+        let elem = wiki.query-label(it.target)
+        if elem.func() == heading and elem.level <= 1 {
+            let document-location = wiki.document-at(elem.location())
+            link(document-location, elem.body)
         } else {
-            it
+            link(elem.location(), elem.body)
         }
     }
 
@@ -130,20 +118,40 @@
             return it
         }
 
-        let queried = wiki.query-label(it.dest)
-        if queried == none {
-            h.code([UNRESOLVED])
-        } else if queried.func() == ext-ref {
-            h.a(href: html-link(queried), it.body)
+        let elem = wiki.query-label(it.dest)
+        if elem.func() == heading and elem.level <= 1 {
+            let document-location = wiki.document-at(elem.location())
+            link(document-location, elem.body)
         } else {
-            it
+            link(elem.location(), elem.body)
         }
+    }
+
+    show h.elem.where(tag: "a"): it => {
+        if "href" not in it.attrs {
+            return it
+        } else if it.attrs.href.starts-with(regex("https?://")) {
+            return it
+        }
+
+        let (path, ..fragment) = it.attrs.href.split("#")
+        let path = path.replace(
+            regex("/index.html$"), "/"
+        ).replace(
+            regex("^index.html$"), "."
+        )
+        let href = (path, ..fragment).join("#")
+
+        if href == it.attrs.href {
+            return it
+        }
+        h.elem("a", attrs: (..it.attrs, href: href), it.body)
     }
 
     show image: it => [
         #let asset = wiki.read-asset(it.source, it)
         #asset
-        #h.img(src: wiki.make-relative(asset.path), loading: "lazy")
+        #h.img(src: wiki.make-relative(asset.path, out-path), loading: "lazy")
     ]
 
     set raw(theme: none)
@@ -161,17 +169,22 @@
     let favicon = asset("favicon.svg", read("favicon.svg"))
     favicon
 
-    h.html(lang: "en")[
+    let html = h.html(lang: "en")[
         #h.head[
             #h.meta(charset: "utf-8")
             #h.meta(name: "viewport", content: "width=device-width, initial-scale=1")
             #h.title[#context title.final() | digraph.me]
-            #h.link(rel: "icon", type: "image/svg", href: wiki.make-relative(favicon.path))
+            #h.link(rel: "icon", type: "image/svg", href: wiki.make-relative(favicon.path, out-path))
             #h.style(read("index.css"))
         ]
         #h.body[
             #h.header[
-                #h.a(href: wiki.make-relative("/"), style: "float: right; text-decoration: none")[«]
+                #let link = if out-path == "/index.html" {
+                    ".."
+                } else {
+                    wiki.make-relative("/", out-path)
+                }
+                #h.a(href: link, style: "float: right; text-decoration: none")[«]
             ]
             #h.main[
                 #body
@@ -184,13 +197,14 @@
             ]
         ]
     ]
+
+    wiki.register-for-index(in-path)
+    if publish {
+        document(out-path, html)
+    }
 } else {
-    show ref: it => {
-        if query(it.target).len() > 0 { it }
-    }
-    show link: it => {
-        if type(it.dest) != label or query(it.dest).len() > 0 { it }
-    }
+    show document: it => { it.body }
+    show asset: it => { }
 
     body
 }

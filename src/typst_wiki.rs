@@ -8,7 +8,7 @@ use comemo::{Track, Tracked, TrackedMut};
 use rustc_hash::FxHashMap;
 use typst::{
     World,
-    diag::{SourceResult, StrResult, Warned, error},
+    diag::{At as _, SourceResult, StrResult, Warned, error},
     ecow::{EcoString, EcoVec},
     engine::Engine,
     foundations::{
@@ -177,7 +177,7 @@ fn compile_document(
 
     let format = document_elem
         .determine_format(styles)
-        .unwrap_or_else(|_| todo!()); // .at(elem.span())
+        .at(document_elem.span())?;
     let target = TargetElem::target.set(format.target()).wrap();
     let styles = styles.chain(&target);
 

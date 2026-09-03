@@ -11,7 +11,9 @@ use typst::{
         BundlePath, Content, Context, IntoValue as _, Label, LocatableSelector, NativeElement as _,
         PathOrStr, Recipe, Repr, Selector, Str, Transformation, Value, eco_format,
     },
-    introspection::{Introspector, Location, MetadataElem, QueryIntrospection},
+    introspection::{
+        DocumentIntrospection, Introspector, Location, MetadataElem, QueryIntrospection,
+    },
     model::{AssetData, AssetElem},
     syntax::{Span, Spanned, VirtualPath},
 };
@@ -139,12 +141,8 @@ impl WikiScope {
     }
 
     #[func]
-    fn document_of(&self, engine: &Engine, location: Location) -> Result<Location, HintedString> {
-        engine
-            .introspector
-            .access("foo")
-            .document(location)
-            .ok_or_else(|| "TODO".into())
+    fn document_at(&self, engine: &mut Engine, location: Spanned<Location>) -> Option<Location> {
+        engine.introspect(DocumentIntrospection(location.v, location.span))
     }
 
     #[func]

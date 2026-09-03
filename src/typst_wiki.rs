@@ -390,9 +390,6 @@ impl<'a> Introspector for FocusedIntrospector<'a> {
     }
 
     fn locator(&self, key: u128, base: Location) -> Option<Location> {
-        // if self.document(base).is_none_or(|loc| loc != self.ancestor) {
-        //     return None;
-        // }
         self.inner.locator(key, base)
     }
 

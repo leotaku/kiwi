@@ -21,11 +21,8 @@ use tower_livereload::LiveReloadLayer;
 use tracing::{info, trace, warn};
 use typst::{
     Features, Library, LibraryExt as _,
-    foundations::{
-        Content, Dict, IntoValue as _, NativeElement, Recipe, Repr as _, Transformation,
-    },
-    model::AssetElem,
-    syntax::{Span, VirtualPath},
+    foundations::{Dict, IntoValue as _, Repr as _},
+    syntax::VirtualPath,
 };
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 
@@ -244,11 +241,7 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Option<Wiki> {
         .with_features(Features::all())
         .with_inputs(inputs)
         .build();
-    library.styles.push(Recipe::new(
-        Some(AssetElem::ELEM.select()),
-        Transformation::Content(Content::empty()),
-        Span::detached(),
-    ));
+    library.styles.push(typst_addons::HIDE_ASSETS_STYLE.clone());
 
     let world = AutoIncludeWorld::new(context, library.into());
     let warned = typst_wiki::compile(&world);

@@ -1,3 +1,5 @@
+use std::cell::LazyCell;
+
 use comemo::Tracked;
 use rustc_hash::FxHashSet;
 use typst::{
@@ -7,15 +9,24 @@ use typst::{
     engine::Engine,
     foundations::{
         BundlePath, Content, Context, IntoValue as _, Label, LocatableSelector, NativeElement as _,
-        PathOrStr, Repr, Selector, Str, Value, eco_format,
+        PathOrStr, Recipe, Repr, Selector, Str, Style, Transformation, Value, eco_format,
     },
     introspection::{Introspector, Location, MetadataElem, QueryIntrospection},
     model::{AssetData, AssetElem},
-    syntax::{Spanned, VirtualPath},
+    syntax::{Span, Spanned, VirtualPath},
 };
 use typst_macros::func;
 
 use crate::typst_wiki::GlobalQueryMarker;
+
+pub const HIDE_ASSETS_STYLE: LazyCell<Style> = LazyCell::new(|| {
+    Recipe::new(
+        Some(AssetElem::ELEM.select()),
+        Transformation::Content(Content::empty()),
+        Span::detached(),
+    )
+    .into()
+});
 
 #[typst_macros::ty]
 #[derive(Clone, Debug, PartialEq, Hash)]

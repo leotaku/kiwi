@@ -71,7 +71,7 @@ impl Page {
 
 impl Repr for Page {
     fn repr(&self) -> EcoString {
-        "page".into()
+        eco_format!("page({:?})", self.path)
     }
 }
 
@@ -187,6 +187,11 @@ impl Wiki {
     }
 
     #[func]
+    fn main(&self, engine: &Engine) -> EcoString {
+        engine.world.main().vpath().get_with_slash().into()
+    }
+
+    #[func]
     fn read_asset(
         &mut self,
         engine: &Engine,
@@ -219,6 +224,45 @@ impl Repr for Wiki {
     }
 }
 
+// #[func]
+// fn document_to_asset(
+//     engine: &mut Engine,
+//     context: Tracked<Context>,
+//     content: Content,
+// ) -> Result<Value, EcoVec<SourceDiagnostic>> {
+//     let document = content
+//         .into_packed::<DocumentElem>()
+//         .unwrap_or_else(|_| unreachable!());
+//     let styles = context
+//         .styles()
+//         .unwrap_or_else(|_| unreachable!())
+//         .to_map()
+//         .outside();
+
+//     let html_document = typst_html::html_document_for_bundle(
+//         engine,
+//         &document.body,
+//         Locator::root(),
+//         StyleChain::new(&styles),
+//     )?;
+//     let html_data = typst_html::html(&html_document, &Default::default())?;
+
+//     let mut assets: Vec<Content> = html_document
+//         .introspector()
+//         .query(&Selector::Elem(AssetElem::ELEM, None))
+//         .into_iter()
+//         .collect();
+//     assets.push(
+//         AssetElem::new(
+//             document.path.clone(),
+//             AssetData(Bytes::from_string(html_data)),
+//         )
+//         .pack(),
+//     );
+
+//     Ok(SequenceElem::new(assets).into_value())
+// }
+
 pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
     let mut entries = Vec::new();
     let mut paths = Vec::new();
@@ -244,6 +288,11 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
         Transformation::Content(Content::empty()),
         Span::detached(),
     ));
+    // library.styles.push(Recipe::new(
+    //     Some(DocumentElem::ELEM.select()),
+    //     Transformation::Func(document_to_asset::func()),
+    //     Span::detached(),
+    // ));
     let library = LazyHash::new(library);
 
     for path in paths {
@@ -258,6 +307,15 @@ pub fn render_wiki(wiki: Wiki, context: &GlobalContext) -> Wiki {
                 output: Ok(mut document),
                 warnings,
             } => {
+                match document.root().children[1].clone() {
+                    typst_html::HtmlNode::Tag(tag) => todo!(),
+                    typst_html::HtmlNode::Text(eco_string, span) => todo!(),
+                    typst_html::HtmlNode::Element(html_element) => {
+                        dbg!(html_element.tag, html_element.children.len());
+                    }
+                    typst_html::HtmlNode::Frame(html_frame) => todo!(),
+                }
+
                 let targets = document
                     .introspector()
                     .query_labelled()

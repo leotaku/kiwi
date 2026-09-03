@@ -1,13 +1,41 @@
 use comemo::Tracked;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use typst::{
-    World as _, diag::{HintedString, Severity, SourceDiagnostic, error}, ecow::{EcoString, EcoVec}, engine::Engine, foundations::{
-        BundlePath, Bytes, Content, Context, IntoValue as _, Label, LocatableSelector, NativeElement as _, PathOrStr, Repr, Selector, Str, Value, eco_format,
-    }, introspection::{Introspector, QueryIntrospection}, model::{AssetData, AssetElem, DocumentElem}, syntax::{Spanned, VirtualPath, VirtualRoot},
+    World as _,
+    diag::{HintedString, error},
+    ecow::EcoString,
+    engine::Engine,
+    foundations::{
+        BundlePath, Content, Context, IntoValue as _, Label, LocatableSelector, NativeElement as _,
+        PathOrStr, Repr, Selector, Str, Value, eco_format,
+    },
+    introspection::{Introspector, Location, MetadataElem, QueryIntrospection},
+    model::{AssetData, AssetElem},
+    syntax::{Spanned, VirtualPath},
 };
 use typst_macros::func;
 
-use crate::typst_wiki::GlobalIndicator;
+use crate::typst_wiki::GlobalQueryMarker;
+
+#[typst_macros::ty]
+#[derive(Clone, Debug, PartialEq, Hash)]
+pub struct IndexMarker(pub VirtualPath);
+
+impl Repr for IndexMarker {
+    fn repr(&self) -> EcoString {
+        eco_format!("index-marker({})", self.0.get_with_slash().repr())
+    }
+}
+
+pub fn collect_index_paths<I: Introspector>(introspector: &I) -> FxHashSet<VirtualPath> {
+    introspector
+        .query(&Selector::Elem(MetadataElem::ELEM, None))
+        .into_iter()
+        .filter_map(|content| content.into_packed::<MetadataElem>().ok())
+        .filter_map(|elem| elem.value.clone().cast::<IndexMarker>().ok())
+        .map(|value| value.0)
+        .collect()
+}
 
 #[typst_macros::ty(scope)]
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -30,7 +58,7 @@ impl WikiScope {
     ) -> Result<Vec<Content>, HintedString> {
         let global_selector = selector
             .v
-            .within(LocatableSelector(Selector::can::<GlobalIndicator>()));
+            .within(LocatableSelector(Selector::can::<GlobalQueryMarker>()));
 
         context.introspect()?;
         Ok(engine
@@ -95,78 +123,45 @@ impl WikiScope {
     }
 
     #[func]
-    fn path_of(&self, anchor: Content) -> Result<Str, HintedString> {
+    fn input_of(&self, anchor: Content) -> Result<Str, HintedString> {
         let file_id = anchor.span().id().ok_or("the containing file is unknown")?;
         Ok(file_id.get().vpath().get_with_slash().into())
     }
 
     #[func]
-    fn make_relative(&self, engine: &Engine, path: PathOrStr) -> Result<EcoString, HintedString> {
-        todo!()
+    fn document_of(&self, engine: &Engine, location: Location) -> Result<Location, HintedString> {
+        engine
+            .introspector
+            .access("foo")
+            .document(location)
+            .ok_or_else(|| "TODO".into())
+    }
+
+    #[func]
+    fn make_relative(&self, path: Str, base: Str) -> Result<EcoString, HintedString> {
+        let path = VirtualPath::new(path).unwrap();
+        let base = VirtualPath::new(base).unwrap();
+
+        Ok(relative_from_parent(&path, &base))
+    }
+
+    #[func]
+    fn register_for_index(&self, path: Str) -> Result<Value, HintedString> {
+        Ok(MetadataElem::new(
+            IndexMarker(VirtualPath::new(path).unwrap_or_else(|_| todo!())).into_value(),
+        )
+        .into_value())
     }
 }
 
-pub fn collect_document_paths<I: Introspector>(introspector: &I) -> FxHashSet<VirtualPath> {
-    introspector
-        .query(&Selector::Elem(DocumentElem::ELEM, None))
-        .into_iter()
-        .filter_map(|content| content.span().id())
-        .filter_map(|id| {
-            if *id.root() == VirtualRoot::Project {
-                Some(id.vpath().clone())
-            } else {
-                None
-            }
-        })
-        .collect()
-}
+fn relative_from_parent(path: &VirtualPath, base: &VirtualPath) -> EcoString {
+    let relative = base
+        .parent()
+        .map_or_else(|| unreachable!(), |parent| path.relative_from(&parent));
 
-pub fn collect_assets<I: Introspector>(
-    introspector: &I,
-) -> Result<Vec<(BundlePath, Bytes)>, Vec<SourceDiagnostic>> {
-    let mut potential_outputs = FxHashMap::default();
-
-    for (span, asset) in introspector
-        .query(&Selector::Elem(AssetElem::ELEM, None))
-        .into_iter()
-        .filter_map(|content| content.into_packed::<AssetElem>().ok())
-        .map(|packed| (packed.span(), packed.unpack()))
-    {
-        potential_outputs
-            .entry(asset.path)
-            .or_insert_with(Vec::new)
-            .push((span, asset.data));
-    }
-
-    let mut outputs = Vec::new();
-    let mut errors = Vec::new();
-    for (path, mut candidates) in potential_outputs.drain() {
-        let (first_span, first_data) = candidates.pop().unwrap_or_else(|| unreachable!());
-        let conflict_messages: EcoVec<_> = candidates
-            .into_iter()
-            .filter(|(_, data)| *data != first_data)
-            .map(|(span, _)| Spanned::new("conflicting asset".into(), span.into()))
-            .collect();
-
-        if !conflict_messages.is_empty() {
-            errors.push(SourceDiagnostic {
-                severity: Severity::Error,
-                span: first_span.into(),
-                message: eco_format!(
-                    r#"multiple conflicting assets for output "{}""#,
-                    path.as_ref().get_with_slash()
-                ),
-                trace: Default::default(),
-                hints: conflict_messages,
-            });
-        } else {
-            outputs.push((path, first_data.0))
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(outputs)
+    if relative == "" && path != base {
+        ".".into()
     } else {
-        Err(errors)
+        relative
     }
 }

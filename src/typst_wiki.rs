@@ -50,24 +50,31 @@ pub fn compile(world: &dyn World) -> Warned<SourceResult<Wiki>> {
                     resolver.track(),
                 ) {
                     Ok(text) => {
-                        entries.insert(out_path, Spanned::new(Bytes::from_string(text), document.span));
+                        entries.insert(
+                            out_path,
+                            Spanned::new(Bytes::from_string(text), document.span),
+                        );
                     }
                     Err(errors) => all_errors.extend(errors),
                 }
             }
 
-            for elem in
-                wiki.introspector
-                    .query(&Selector::Elem(AssetElem::ELEM, None))
-                    .into_iter()
-                    .filter_map(|content| content.into_packed::<AssetElem>().ok())
+            for elem in wiki
+                .introspector
+                .query(&Selector::Elem(AssetElem::ELEM, None))
+                .into_iter()
+                .filter_map(|content| content.into_packed::<AssetElem>().ok())
             {
                 match entries.entry(elem.path.clone().into_inner()) {
-                    Entry::Occupied(entry) => all_errors.push(error!(
-                        elem.span(), "path `{}` occurs multiple times in the bundle", elem.path.as_ref().get_without_slash();
-                        hint: "{} paths must be unique in the bundle", elem.pack_ref().func().name();
-                        hint[entry.get().span]: "path is already in use here";
-                    )),
+                    Entry::Occupied(entry) => {
+                        if entry.get().v != elem.data.0 {
+                            all_errors.push(error!(
+                                elem.span(), "path `{}` occurs multiple times in the bundle", elem.path.as_ref().get_without_slash();
+                                hint: "{} paths must be unique in the bundle", elem.pack_ref().func().name();
+                                hint[entry.get().span]: "path is already in use here";
+                            ))
+                        }
+                    }
                     Entry::Vacant(entry) => {
                         entry.insert(Spanned::new(elem.data.0.clone(), elem.span()));
                     }
@@ -76,7 +83,10 @@ pub fn compile(world: &dyn World) -> Warned<SourceResult<Wiki>> {
 
             if all_errors.is_empty() {
                 Ok(Wiki {
-                    entries: entries.drain().map(|(path, spanned)| (path, spanned.v)).collect(),
+                    entries: entries
+                        .drain()
+                        .map(|(path, spanned)| (path, spanned.v))
+                        .collect(),
                     introspector: wiki.introspector,
                 })
             } else {
@@ -130,6 +140,7 @@ impl Output for Wiki<Spanned<typst_html::HtmlDocument>> {
                 });
 
                 match entries.entry(path.clone().into_inner()) {
+                    // TODO: build vector here and filter later
                     Entry::Occupied(entry) => engine.sink.delayed_error(error!(
                         content.span(), "path `{}` occurs multiple times in the bundle", path.as_ref().get_without_slash();
                         hint: "{} paths must be unique in the bundle", content.func().name();
@@ -220,12 +231,14 @@ where
     f(&mut engine)
 }
 
-pub struct GlobalIndicator;
+pub struct GlobalQueryMarker;
 
 pub struct WikiIntrospector {
     elements: ElementIntrospector<Option<Location>>,
     anchors: HashMap<Location, EcoString>,
 }
+
+const EMPTY_STRING: &'static EcoString = &EcoString::inline("");
 
 impl Introspector for WikiIntrospector {
     fn query(&self, selector: &Selector) -> EcoVec<Content> {
@@ -281,6 +294,14 @@ impl Introspector for WikiIntrospector {
     }
 
     fn anchor(&self, location: Location) -> Option<&EcoString> {
+        if self
+            .elements
+            .get_by_loc(&location)
+            .and_then(|content| content.to_packed::<DocumentElem>())
+            .is_some()
+        {
+            return Some(EMPTY_STRING);
+        }
         self.anchors.get(&location)
     }
 
@@ -305,7 +326,7 @@ impl<'a> FocusedIntrospector<'a> {
     fn adapt_selector(&self, selector: &Selector) -> Selector {
         match selector {
             Selector::Within { selector, ancestor }
-                if ancestor.as_ref() == &Selector::can::<GlobalIndicator>() =>
+                if ancestor.as_ref() == &Selector::can::<GlobalQueryMarker>() =>
             {
                 (**selector).clone()
             }
@@ -338,7 +359,7 @@ impl<'a> Introspector for FocusedIntrospector<'a> {
                 Ok(content)
             } else {
                 Err(error!(
-                    "label `{}` exists in the wiki, but not in the document",
+                    "label `{}` does not exist in the document",
                     label.repr()
                 ))
             }

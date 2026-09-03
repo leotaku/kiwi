@@ -21,8 +21,11 @@ use tower_livereload::LiveReloadLayer;
 use tracing::{info, trace, warn};
 use typst::{
     Features, Library, LibraryExt as _,
-    foundations::{Dict, IntoValue as _},
-    syntax::VirtualPath,
+    foundations::{
+        Content, Dict, IntoValue as _, NativeElement, Recipe, Repr as _, Transformation,
+    },
+    model::AssetElem,
+    syntax::{Span, VirtualPath},
 };
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 
@@ -75,7 +78,7 @@ struct Watch {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt().init();
 
     let cmd = Command::parse();
     match cmd {
@@ -133,9 +136,12 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
             let context_arc = Arc::new(context);
             *pages.write().await = compile_to_memory(context_arc.clone());
             if let Some(ref index_path) = args.index {
-                generate_typst_index(pages.read().await.as_ref(), index_path).unwrap_or_else(
-                    |err| warn!("could not write LSP index file: {}", err.to_string()),
+                generate_typst_index(
+                    pages.read().await.as_ref(),
+                    context_arc.directory(),
+                    index_path,
                 )
+                .unwrap_or_else(|err| warn!("could not write LSP index file: {}", err.to_string()))
             }
             reloader.reload();
             info!("reload");
@@ -234,13 +240,17 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Option<Wiki> {
     let mut inputs = Dict::new();
     inputs.insert("x-wiki".into(), WikiScope.into_value());
 
-    let library = Library::builder()
+    let mut library = Library::builder()
         .with_features(Features::all())
         .with_inputs(inputs)
-        .build()
-        .into();
+        .build();
+    library.styles.push(Recipe::new(
+        Some(AssetElem::ELEM.select()),
+        Transformation::Content(Content::empty()),
+        Span::detached(),
+    ));
 
-    let world = AutoIncludeWorld::new(context, library);
+    let world = AutoIncludeWorld::new(context, library.into());
     let warned = typst_wiki::compile(&world);
     diagnostics.extend(warned.warnings);
 
@@ -266,6 +276,33 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Option<Wiki> {
     result
 }
 
-fn generate_typst_index(wiki: Option<&Wiki>, index_path: &std::path::Path) -> std::io::Result<()> {
-    todo!()
+fn generate_typst_index(
+    wiki: Option<&Wiki>,
+    root_path: &std::path::Path,
+    index_path: &std::path::Path,
+) -> std::io::Result<()> {
+    let wiki = match wiki {
+        Some(wiki) => wiki,
+        None => return Ok(()),
+    };
+
+    let index_path_parent = index_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(".."));
+
+    let paths = typst_routines_2::collect_index_paths(&*wiki.introspector)
+        .into_iter()
+        .filter_map(|path| path.realize(root_path).ok())
+        .filter_map(|path| VirtualPath::virtualize(index_path_parent, &path).ok());
+
+    let mut include_statements: Vec<_> = paths
+        .into_iter()
+        .map(|path| format!(r#"#include({})"#, path.get_with_slash().repr()))
+        .collect();
+    include_statements.insert(0, r#"#set heading(numbering: "1.")"#.to_owned());
+    include_statements.push("".to_owned());
+
+    std::fs::write(index_path, include_statements.join("\n"))?;
+
+    Ok(())
 }

@@ -80,6 +80,7 @@
 }
 
 #let page(publish: true, body) = if "x-wiki" in sys.inputs {
+    import "@local/turner:0.0.1"
     let h = html
 
     let in-path = wiki.input-of(body.children.first())
@@ -148,11 +149,12 @@
         h.elem("a", attrs: (..it.attrs, href: href), it.body)
     }
 
-    show image: it => [
-        #let asset = wiki.read-asset(it.source, it)
-        #asset
-        #h.img(src: wiki.make-relative(asset.path, out-path), loading: "lazy")
-    ]
+    show image: it => {
+        let asset = wiki.read-asset(it.source, it)
+        let (x, y) = turner.image-dimensions(asset.data)
+        asset
+        h.img(src: wiki.make-relative(asset.path, out-path), width: x, height: y, loading: "lazy")
+    }
 
     set raw(theme: none)
 

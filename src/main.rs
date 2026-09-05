@@ -89,7 +89,7 @@ fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
 
     let pages = compile_to_memory(Arc::new(context))
         .map(|wiki| wiki.entries)
-        .unwrap_or_default();
+        .unwrap_or_else(|| std::process::exit(1));
     for (path, contents) in pages {
         let path = path.realize(&args.output)?;
         path.parent().and_then(|p| std::fs::create_dir_all(p).ok());

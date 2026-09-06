@@ -88,8 +88,8 @@ fn compile(args: Compile) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let context = ReusableContext::new(args.directory);
 
     let pages = match compile_to_memory(Arc::new(context)) {
-        Some(wiki) => wiki.entries,
-        None => return Ok(ExitCode::FAILURE),
+        Ok(wiki) => wiki.entries,
+        Err(()) => return Ok(ExitCode::FAILURE),
     };
     for (path, contents) in pages {
         let path = path.realize(&args.output)?;
@@ -132,7 +132,7 @@ async fn watch(args: Watch) -> Result<ExitCode, Box<dyn std::error::Error>> {
         while let Some(event) = recv.recv().await {
             trace!(changed_files = ?event.paths, "recompiling");
             let context_arc = Arc::new(context);
-            *pages.write().await = compile_to_memory(context_arc.clone());
+            *pages.write().await = compile_to_memory(context_arc.clone()).ok();
             if let Some(ref index_path) = args.index {
                 generate_typst_index(
                     pages.read().await.as_ref(),
@@ -233,7 +233,7 @@ async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response,
     Ok(response.into_response())
 }
 
-fn compile_to_memory(context: Arc<ReusableContext>) -> Option<Wiki> {
+fn compile_to_memory(context: Arc<ReusableContext>) -> Result<Wiki, ()> {
     let mut stream = StandardStream::stderr(Default::default());
 
     let mut diagnostics = Vec::new();
@@ -252,10 +252,10 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Option<Wiki> {
     diagnostics.extend(warned.warnings);
 
     let result = match warned.output {
-        Ok(wiki) => Some(wiki),
+        Ok(wiki) => Ok(wiki),
         Err(errors) => {
             diagnostics.extend(errors);
-            None
+            Err(())
         }
     };
 

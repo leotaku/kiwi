@@ -2,7 +2,7 @@ mod typst_addons;
 mod typst_wiki;
 mod typst_world;
 
-use std::sync::Arc;
+use std::{process::ExitCode, sync::Arc};
 
 use axum::{
     Router,
@@ -74,7 +74,7 @@ struct Watch {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().init();
 
     let cmd = Command::parse();
@@ -84,22 +84,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
+fn compile(args: Compile) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let context = ReusableContext::new(args.directory);
 
-    let pages = compile_to_memory(Arc::new(context))
-        .map(|wiki| wiki.entries)
-        .unwrap_or_else(|| std::process::exit(1));
+    let pages = match compile_to_memory(Arc::new(context)) {
+        Some(wiki) => wiki.entries,
+        None => return Ok(ExitCode::FAILURE),
+    };
     for (path, contents) in pages {
         let path = path.realize(&args.output)?;
         path.parent().and_then(|p| std::fs::create_dir_all(p).ok());
         std::fs::write(path, contents)?
     }
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
-async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
+async fn watch(args: Watch) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let mut context = ReusableContext::new(args.directory);
 
     let pages = Arc::new(RwLock::new(None));
@@ -159,7 +160,7 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
 
     axum::serve(listener, app).await?;
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn add_cache_headers(mut rsp: Response) -> Response {

@@ -110,9 +110,12 @@ impl ReusableContext {
 
 impl AutoIncludeWorld {
     pub fn new(context: Arc<ReusableContext>, library: LazyHash<Library>) -> Self {
-        let virtual_main_content = find_typst_paths(context.directory())
-            .map(|path| format!("#include {}\n", path.get_with_slash().repr()))
-            .collect::<String>();
+        let mut include_statements: Vec<_> = find_typst_paths(context.directory())
+            .map(|path| format!(r#"#include({})"#, path.get_with_slash().repr()))
+            .collect();
+        include_statements.push("".to_owned());
+
+        let virtual_main_content = include_statements.join("\n");
 
         Self {
             context,

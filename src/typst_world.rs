@@ -54,29 +54,6 @@ impl typst_kit::downloader::Downloader for Downloader {
     }
 }
 
-pub struct AutoIncludeWorld {
-    context: Arc<ReusableContext>,
-    library: LazyHash<Library>,
-    virtual_main_content: String,
-}
-
-fn find_typst_paths(root_path: &Path) -> impl Iterator<Item = VirtualPath> {
-    WalkDir::new(root_path)
-        .into_iter()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.path().extension().is_some_and(|ext| ext == "typ")
-                && entry.metadata().is_ok_and(|m| m.is_file())
-                && !path_is_hidden(entry.path())
-        })
-        .filter_map(|entry| VirtualPath::virtualize(root_path, entry.path()).ok())
-}
-
-fn path_is_hidden(path: &std::path::Path) -> bool {
-    path.iter()
-        .any(|segment| segment.as_encoded_bytes().starts_with(".".as_ref()))
-}
-
 pub struct ReusableContext {
     root: PathBuf,
     fonts: FontStore,
@@ -106,6 +83,12 @@ impl ReusableContext {
     pub fn files_mut(&mut self) -> &mut FileStore<SystemFiles> {
         &mut self.files
     }
+}
+
+pub struct AutoIncludeWorld {
+    pub context: Arc<ReusableContext>,
+    library: LazyHash<Library>,
+    virtual_main_content: String,
 }
 
 impl AutoIncludeWorld {
@@ -165,4 +148,21 @@ impl typst_kit::diagnostics::DiagnosticWorld for AutoIncludeWorld {
     fn name(&self, id: FileId) -> String {
         id.vpath().get_without_slash().to_string()
     }
+}
+
+fn find_typst_paths(root_path: &Path) -> impl Iterator<Item = VirtualPath> {
+    WalkDir::new(root_path)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.path().extension().is_some_and(|ext| ext == "typ")
+                && entry.metadata().is_ok_and(|m| m.is_file())
+                && !path_is_hidden(entry.path())
+        })
+        .filter_map(|entry| VirtualPath::virtualize(root_path, entry.path()).ok())
+}
+
+fn path_is_hidden(path: &std::path::Path) -> bool {
+    path.iter()
+        .any(|segment| segment.as_encoded_bytes().starts_with(".".as_ref()))
 }

@@ -94,7 +94,7 @@ fn compile(args: Compile) -> Result<ExitCode, Box<dyn std::error::Error>> {
     for (path, contents) in pages {
         let path = path.realize(&args.output)?;
         path.parent().and_then(|p| std::fs::create_dir_all(p).ok());
-        std::fs::write(path, contents)?
+        std::fs::write(path, contents)?;
     }
 
     Ok(ExitCode::SUCCESS)

@@ -1,3 +1,4 @@
+mod errors;
 mod typst_addons;
 mod typst_wiki;
 mod typst_world;
@@ -18,7 +19,7 @@ use tokio::sync::RwLock;
 use tower::ServiceExt as _;
 use tower_http::services::ServeDir;
 use tower_livereload::LiveReloadLayer;
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 use typst::{
     Features, Library, LibraryExt as _,
     foundations::{Dict, IntoValue as _, Repr as _},
@@ -27,6 +28,7 @@ use typst::{
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 
 use crate::{
+    errors::EmptyError,
     typst_addons::WikiScope,
     typst_wiki::Wiki,
     typst_world::{AutoIncludeWorld, ReusableContext},
@@ -74,33 +76,40 @@ struct Watch {
 }
 
 #[tokio::main]
-async fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
+async fn main() -> ExitCode {
     tracing_subscriber::fmt().init();
 
     let cmd = Command::parse();
-    match cmd {
+    let result = match cmd {
         Command::Compile(args) => compile(args),
         Command::Watch(args) => watch(args).await,
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            if !err.is::<EmptyError>() {
+                error!("{}", err)
+            }
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn compile(args: Compile) -> Result<ExitCode, Box<dyn std::error::Error>> {
+fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
     let context = ReusableContext::new(args.directory);
 
-    let pages = match compile_to_memory(Arc::new(context)) {
-        Ok(wiki) => wiki.entries,
-        Err(()) => return Ok(ExitCode::FAILURE),
-    };
-    for (path, contents) in pages {
+    let wiki = compile_to_memory(Arc::new(context))?;
+    for (path, contents) in wiki.entries {
         let path = path.realize(&args.output)?;
         path.parent().and_then(|p| std::fs::create_dir_all(p).ok());
         std::fs::write(path, contents)?;
     }
 
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
-async fn watch(args: Watch) -> Result<ExitCode, Box<dyn std::error::Error>> {
+async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     let mut context = ReusableContext::new(args.directory);
 
     let pages = Arc::new(RwLock::new(None));
@@ -160,7 +169,7 @@ async fn watch(args: Watch) -> Result<ExitCode, Box<dyn std::error::Error>> {
 
     axum::serve(listener, app).await?;
 
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 async fn add_cache_headers(mut rsp: Response) -> Response {
@@ -233,7 +242,7 @@ async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response,
     Ok(response.into_response())
 }
 
-fn compile_to_memory(context: Arc<ReusableContext>) -> Result<Wiki, ()> {
+fn compile_to_memory(context: Arc<ReusableContext>) -> Result<Wiki, EmptyError> {
     let mut stream = StandardStream::stderr(Default::default());
 
     let mut diagnostics = Vec::new();
@@ -255,7 +264,7 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Result<Wiki, ()> {
         Ok(wiki) => Ok(wiki),
         Err(errors) => {
             diagnostics.extend(errors);
-            Err(())
+            Err(EmptyError)
         }
     };
 

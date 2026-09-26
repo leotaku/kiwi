@@ -1,8 +1,8 @@
 #let wiki = if "x-wiki" in sys.inputs {
     sys.inputs.x-wiki
 } else {
-    import "fake-wiki.typ"
-    fake-wiki
+    import "wiki-polyfill.typ"
+    wiki-polyfill
 }
 
 #let plain-text(content) = {

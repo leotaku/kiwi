@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
+    sync::LazyLock,
 };
 
 use bytes::Buf as _;
@@ -54,57 +54,49 @@ impl typst_kit::downloader::Downloader for Downloader {
     }
 }
 
-pub struct ReusableContext {
-    root: PathBuf,
+pub struct AutoIncludeWorld {
+    library: LazyHash<Library>,
     fonts: FontStore,
     files: FileStore<SystemFiles>,
+    virtual_main_content: String,
 }
 
-impl ReusableContext {
-    pub fn new(root: PathBuf) -> Self {
+impl AutoIncludeWorld {
+    pub fn new(root_path: PathBuf, library: LazyHash<Library>) -> Self {
+        let mut include_statements: Vec<_> = find_typst_paths(&root_path)
+            .map(|path| format!(r#"#include({})"#, path.get_with_slash().repr()))
+            .collect();
+        include_statements.push("".to_owned());
+        let virtual_main_content = include_statements.join("\n");
+
         let mut fonts = FontStore::new();
         fonts.extend(typst_kit::fonts::embedded());
         fonts.extend(typst_kit::fonts::system());
 
         let files = FileStore::new(SystemFiles::new(
-            FsRoot::new(root.clone()),
+            FsRoot::new(root_path),
             SystemPackages::new(Downloader {
                 client: reqwest::Client::new(),
             }),
         ));
 
-        Self { root, fonts, files }
-    }
-
-    pub fn directory(&self) -> &Path {
-        &self.root
+        Self {
+            library,
+            fonts,
+            files,
+            virtual_main_content,
+        }
     }
 
     pub fn files_mut(&mut self) -> &mut FileStore<SystemFiles> {
         &mut self.files
     }
-}
 
-pub struct AutoIncludeWorld {
-    pub context: Arc<ReusableContext>,
-    library: LazyHash<Library>,
-    virtual_main_content: String,
-}
-
-impl AutoIncludeWorld {
-    pub fn new(context: Arc<ReusableContext>, library: LazyHash<Library>) -> Self {
-        let mut include_statements: Vec<_> = find_typst_paths(context.directory())
-            .map(|path| format!(r#"#include({})"#, path.get_with_slash().repr()))
-            .collect();
-        include_statements.push("".to_owned());
-
-        let virtual_main_content = include_statements.join("\n");
-
-        Self {
-            context,
-            library,
-            virtual_main_content,
-        }
+    pub fn root(&self) -> FsRoot {
+        self.files
+            .loader()
+            .root(*VIRTUAL_MAIN)
+            .unwrap_or_else(|_| unreachable!())
     }
 }
 
@@ -114,7 +106,7 @@ impl typst::World for AutoIncludeWorld {
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
-        self.context.fonts.book()
+        self.fonts.book()
     }
 
     fn main(&self) -> FileId {
@@ -125,18 +117,18 @@ impl typst::World for AutoIncludeWorld {
         if id == *VIRTUAL_MAIN {
             return Ok(Source::new(id, self.virtual_main_content.clone()));
         }
-        self.context.files.source(id)
+        self.files.source(id)
     }
 
     fn file(&self, id: FileId) -> FileResult<Bytes> {
         if id == *VIRTUAL_MAIN {
             return Ok(Bytes::from_string(self.virtual_main_content.clone()));
         }
-        self.context.files.file(id)
+        self.files.file(id)
     }
 
     fn font(&self, id: usize) -> Option<Font> {
-        self.context.fonts.font(id)
+        self.fonts.font(id)
     }
 
     fn today(&self, offset: Option<Duration>) -> Option<Datetime> {

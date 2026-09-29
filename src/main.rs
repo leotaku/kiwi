@@ -28,10 +28,7 @@ use typst::{
 use typst_kit::diagnostics::{DiagnosticFormat, termcolor::StandardStream};
 
 use crate::{
-    errors::EmptyError,
-    typst_addons::WikiScope,
-    typst_wiki::Wiki,
-    typst_world::{AutoIncludeWorld, ReusableContext},
+    errors::EmptyError, typst_addons::WikiScope, typst_wiki::Wiki, typst_world::AutoIncludeWorld,
 };
 
 #[derive(Parser)]
@@ -97,9 +94,9 @@ async fn main() -> ExitCode {
 }
 
 fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
-    let context = ReusableContext::new(args.directory);
+    let world = make_world(args.directory);
 
-    let wiki = compile_to_memory(Arc::new(context))?;
+    let wiki = compile_to_memory(&world)?;
     for (path, contents) in wiki.entries {
         let path = path.realize(&args.output)?;
         path.parent().and_then(|p| std::fs::create_dir_all(p).ok());
@@ -110,7 +107,7 @@ fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
-    let mut context = ReusableContext::new(args.directory);
+    let mut world = make_world(args.directory);
 
     let pages = Arc::new(RwLock::new(None));
 
@@ -123,7 +120,7 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
             send.blocking_send(evt).ok();
         }
     })?;
-    watcher.watch(context.directory(), notify::RecursiveMode::Recursive)?;
+    watcher.watch(world.root().path(), notify::RecursiveMode::Recursive)?;
 
     let livereload = LiveReloadLayer::new();
     let reloader = livereload.reloader();
@@ -140,28 +137,24 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         while let Some(event) = recv.recv().await {
             trace!(changed_files = ?event.paths, "recompiling");
-            let context_arc = Arc::new(context);
-            *pages.write().await = compile_to_memory(context_arc.clone()).ok();
+            *pages.write().await = compile_to_memory(&world).ok();
             if let Some(ref index_path) = args.index {
-                generate_typst_index(
-                    pages.read().await.as_ref(),
-                    context_arc.directory(),
-                    index_path,
-                )
-                .unwrap_or_else(|err| warn!("could not write LSP index file: {}", err.to_string()))
+                generate_typst_index(pages.read().await.as_ref(), world.root().path(), index_path)
+                    .unwrap_or_else(|err| {
+                        warn!("could not write LSP index file: {}", err.to_string())
+                    })
             }
             reloader.reload();
             info!("reload");
-            context = Arc::try_unwrap(context_arc).unwrap_or_else(|_| unreachable!());
 
-            let (loader, deps) = context.files_mut().dependencies();
+            let (loader, deps) = world.files_mut().dependencies();
             for file_id in deps {
                 loader
                     .resolve(file_id)
                     .map(|path| watcher.watch(&path, notify::RecursiveMode::NonRecursive))
                     .ok();
             }
-            context.files_mut().reset();
+            world.files_mut().reset();
 
             while recv.try_recv().is_ok() {}
         }
@@ -242,11 +235,7 @@ async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response,
     Ok(response.into_response())
 }
 
-fn compile_to_memory(context: Arc<ReusableContext>) -> Result<Wiki, EmptyError> {
-    let mut stream = StandardStream::stderr(Default::default());
-
-    let mut diagnostics = Vec::new();
-
+fn make_world(root_path: std::path::PathBuf) -> AutoIncludeWorld {
     let mut inputs = Dict::new();
     inputs.insert("x-wiki".into(), WikiScope.into_value());
 
@@ -256,8 +245,17 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Result<Wiki, EmptyError> 
         .build();
     library.styles.push(typst_addons::HIDE_ASSET_RECIPE.clone());
 
-    let world = AutoIncludeWorld::new(context, library.into());
-    let warned = typst_wiki::compile(&world);
+    AutoIncludeWorld::new(root_path, library.into())
+}
+
+fn compile_to_memory<W>(world: &W) -> Result<Wiki, EmptyError>
+where
+    W: typst::World + typst_kit::diagnostics::DiagnosticWorld,
+{
+    let mut stream = StandardStream::stderr(Default::default());
+    let mut diagnostics = Vec::new();
+
+    let warned = typst_wiki::compile(world);
     diagnostics.extend(warned.warnings);
 
     let result = match warned.output {
@@ -270,7 +268,7 @@ fn compile_to_memory(context: Arc<ReusableContext>) -> Result<Wiki, EmptyError> 
 
     typst_kit::diagnostics::emit(
         &mut stream,
-        &world,
+        world,
         diagnostics.iter().filter(|diag| {
             diag.message != "html export is under active development and incomplete"
                 && diag.message != "bundle export is experimental"

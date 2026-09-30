@@ -199,26 +199,23 @@ async fn handler_with_servedir<T: Send + 'static>(
     match (serve_dir, handler(req.uri(), &guard).await) {
         (_, Ok(rsp)) => rsp.into_response(),
         (Some(serve_dir), Err(_)) => serve_dir.oneshot(req).await.into_response(),
-        (_, Err(err)) => err,
+        (_, Err(err)) => err.into_response(),
     }
 }
 
-#[expect(clippy::result_large_err)]
-async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response, Response> {
-    let pages = wiki.as_ref().map(|wiki| &wiki.entries).ok_or_else(|| {
-        (
-            http::StatusCode::INTERNAL_SERVER_ERROR,
-            axum::response::Html("<code>compilation error</code>"),
-        )
-            .into_response()
-    })?;
+type ErrResponse = (http::StatusCode, axum::response::Html<&'static str>);
+
+async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response, ErrResponse> {
+    let pages = wiki.as_ref().map(|wiki| &wiki.entries).ok_or((
+        http::StatusCode::INTERNAL_SERVER_ERROR,
+        axum::response::Html("<code>compilation error</code>"),
+    ))?;
 
     let path = VirtualPath::new(uri.path()).map_err(|_| {
         (
             http::StatusCode::BAD_REQUEST,
             axum::response::Html("<code>malformed uri</code>"),
         )
-            .into_response()
     })?;
 
     let (path, content) = pages
@@ -228,13 +225,10 @@ async fn handler(uri: &axum::http::Uri, wiki: &Option<Wiki>) -> Result<Response,
                 .ok()
                 .and_then(|path| pages.get_key_value(&path))
         })
-        .ok_or_else(|| {
-            (
-                http::StatusCode::NOT_FOUND,
-                axum::response::Html("<code>page not found</code>"),
-            )
-                .into_response()
-        })?;
+        .ok_or((
+            http::StatusCode::NOT_FOUND,
+            axum::response::Html("<code>page not found</code>"),
+        ))?;
 
     let content_type = mime_guess::from_path(path.get_with_slash()).first_or_octet_stream();
     let response = (

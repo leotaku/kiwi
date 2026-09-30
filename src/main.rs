@@ -96,14 +96,24 @@ async fn main() -> ExitCode {
 fn compile(args: Compile) -> Result<(), Box<dyn std::error::Error>> {
     let world = make_world(args.directory);
 
+    let mut writes_errored = false;
     let wiki = compile_to_memory(&world)?;
     for (path, contents) in wiki.entries {
-        let path = path.realize(&args.output)?;
+        let path = path
+            .realize(&args.output)
+            .unwrap_or_else(|_| unreachable!());
         path.parent().and_then(|p| std::fs::create_dir_all(p).ok());
-        std::fs::write(path, contents)?;
+        if let Err(err) = std::fs::write(&path, contents) {
+            error!(path = ?path, "{}", err);
+            writes_errored = true;
+        }
     }
 
-    Ok(())
+    if writes_errored {
+        Err(EmptyError.into())
+    } else {
+        Ok(())
+    }
 }
 
 async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {

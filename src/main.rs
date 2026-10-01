@@ -147,12 +147,12 @@ async fn watch(args: Watch) -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         while let Some(event) = recv.recv().await {
             trace!(changed_files = ?event.paths, "recompiling");
-            *pages.write().await = compile_to_memory(&world).ok();
-            if let Some(ref index_path) = args.index {
-                generate_typst_index(pages.read().await.as_ref(), world.root().path(), index_path)
-                    .unwrap_or_else(|err| {
-                        warn!("could not write LSP index file: {}", err.to_string())
-                    })
+            if let Ok(wiki) = compile_to_memory(&world) {
+                if let Some(index_path) = args.index.as_ref() {
+                    generate_typst_index(&wiki, world.root().path(), index_path)
+                        .unwrap_or_else(|err| warn!("could not write LSP index file: {}", err))
+                }
+                *pages.write().await = Some(wiki);
             }
             reloader.reload();
             info!("reload");
@@ -285,15 +285,10 @@ where
 }
 
 fn generate_typst_index(
-    wiki: Option<&Wiki>,
+    wiki: &Wiki,
     root_path: &std::path::Path,
     index_path: &std::path::Path,
 ) -> std::io::Result<()> {
-    let wiki = match wiki {
-        Some(wiki) => wiki,
-        None => return Ok(()),
-    };
-
     let index_path_parent = index_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new(".."));

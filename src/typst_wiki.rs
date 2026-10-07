@@ -17,7 +17,7 @@ use typst::{
     },
     model::{AssetElem, DocumentElem, LateLinkResolver, Numbering},
     routines::{Arenas, RealizationKind},
-    syntax::{Span, Spanned, VirtualPath},
+    syntax::{Spanned, VirtualPath},
 };
 use typst_html::HtmlDocument;
 use typst_utils::Protected;
@@ -92,19 +92,19 @@ fn deduplicate_entries<T: std::cmp::PartialEq>(
     let mut deduplicated = HashMap::new();
     let mut all_errors = EcoVec::new();
     for (path, mut entries) in partitioned.drain() {
-        if entries.windows(2).all(|pair| pair[0].v == pair[1].v) {
-            let last_entry = entries.pop().unwrap_or_else(|| unreachable!());
+        let last_entry = entries.pop().unwrap_or_else(|| unreachable!());
+        if entries.iter().all(|entry| entry.v == last_entry.v) {
             deduplicated.insert(path, last_entry.v);
         } else {
             let mut error = SourceDiagnostic::error(
-                Span::detached(),
+                last_entry.span,
                 eco_format!(
-                    "path `{}` occurs multiple times in the bundle with differing contents",
+                    "path `{}` occurs multiple times in the bundle with differing outputs",
                     path.get_without_slash()
                 ),
             );
             for spanned in entries {
-                error = error.with_spanned_hint("path is used here", spanned.span);
+                error = error.with_spanned_hint("path is also used here", spanned.span);
             }
             all_errors.push(error)
         }

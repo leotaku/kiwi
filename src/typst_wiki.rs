@@ -1,15 +1,11 @@
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    num::NonZeroUsize,
-    sync::Arc,
-};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Arc};
 
 use comemo::{Track as _, Tracked, TrackedMut};
 use rustc_hash::FxHashMap;
 use typst::{
     World,
-    diag::{At as _, SourceResult, StrResult, Warned, error},
-    ecow::{EcoString, EcoVec},
+    diag::{At as _, SourceDiagnostic, SourceResult, StrResult, Warned},
+    ecow::{EcoString, EcoVec, eco_format},
     engine::Engine,
     foundations::{
         BundlePath, Bytes, Content, Label, NativeElement as _, Output, Packed, Repr as _, Selector,
@@ -21,25 +17,27 @@ use typst::{
     },
     model::{AssetElem, DocumentElem, LateLinkResolver, Numbering},
     routines::{Arenas, RealizationKind},
-    syntax::{Spanned, VirtualPath},
+    syntax::{Span, Spanned, VirtualPath},
 };
 use typst_html::HtmlDocument;
 use typst_utils::Protected;
 
-pub struct Wiki<Entry = Bytes> {
-    pub entries: HashMap<VirtualPath, Entry>,
+pub struct Wiki {
+    pub entries: HashMap<VirtualPath, Bytes>,
     pub introspector: Arc<WikiIntrospector>,
 }
 
+// TODO: what happens with deferred warnings here?
+
 pub fn compile(world: &dyn World) -> Warned<SourceResult<Wiki>> {
-    let compiled = typst::compile::<Wiki<Spanned<typst_html::HtmlDocument>>>(world);
+    let compiled = typst::compile::<WikiDocuments>(world);
 
     compiled.map(|result| {
-        result.and_then(|mut wiki| {
-            let mut entries = HashMap::new();
+        result.and_then(|wiki| {
+            let mut entries = Vec::new();
             let mut all_errors = EcoVec::new();
 
-            for (out_path, document) in wiki.entries.drain() {
+            for (out_path, document) in wiki.documents {
                 let resolver = LateLinkResolver::new(
                     Some(&out_path),
                     wiki.introspector.as_ref() as &dyn Introspector,
@@ -50,10 +48,10 @@ pub fn compile(world: &dyn World) -> Warned<SourceResult<Wiki>> {
                     resolver.track(),
                 ) {
                     Ok(text) => {
-                        entries.insert(
+                        entries.push((
                             out_path,
                             Spanned::new(Bytes::from_string(text), document.span),
-                        );
+                        ));
                     }
                     Err(errors) => all_errors.extend(errors),
                 }
@@ -65,28 +63,15 @@ pub fn compile(world: &dyn World) -> Warned<SourceResult<Wiki>> {
                 .into_iter()
                 .filter_map(|content| content.into_packed::<AssetElem>().ok())
             {
-                match entries.entry(elem.path.clone().into_inner()) {
-                    Entry::Occupied(entry) => {
-                        if entry.get().v != elem.data.0 {
-                            all_errors.push(error!(
-                                elem.span(), "path `{}` occurs multiple times in the bundle", elem.path.as_ref().get_without_slash();
-                                hint: "{} paths must be unique in the bundle", elem.pack_ref().func().name();
-                                hint[entry.get().span]: "path is already in use here";
-                            ))
-                        }
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(Spanned::new(elem.data.0.clone(), elem.span()));
-                    }
-                }
+                entries.push((
+                    elem.path.as_ref().clone(),
+                    Spanned::new(elem.data.0.clone(), elem.span()),
+                ));
             }
 
             if all_errors.is_empty() {
                 Ok(Wiki {
-                    entries: entries
-                        .drain()
-                        .map(|(path, spanned)| (path, spanned.v))
-                        .collect(),
+                    entries: deduplicate_entries(entries)?,
                     introspector: wiki.introspector,
                 })
             } else {
@@ -96,7 +81,48 @@ pub fn compile(world: &dyn World) -> Warned<SourceResult<Wiki>> {
     })
 }
 
-impl Output for Wiki<Spanned<typst_html::HtmlDocument>> {
+fn deduplicate_entries<T: std::cmp::PartialEq>(
+    entries: Vec<(VirtualPath, Spanned<T>)>,
+) -> SourceResult<HashMap<VirtualPath, T>> {
+    let mut partitioned: HashMap<_, Vec<_>> = HashMap::new();
+    for (path, spanned) in entries {
+        partitioned.entry(path).or_default().push(spanned)
+    }
+
+    let mut deduplicated = HashMap::new();
+    let mut all_errors = EcoVec::new();
+    for (path, mut entries) in partitioned.drain() {
+        if entries.windows(2).all(|pair| pair[0].v == pair[1].v) {
+            let last_entry = entries.pop().unwrap_or_else(|| unreachable!());
+            deduplicated.insert(path, last_entry.v);
+        } else {
+            let mut error = SourceDiagnostic::error(
+                Span::detached(),
+                eco_format!(
+                    "path `{}` occurs multiple times in the bundle with differing contents",
+                    path.get_without_slash()
+                ),
+            );
+            for spanned in entries {
+                error = error.with_spanned_hint("path is used here", spanned.span);
+            }
+            all_errors.push(error)
+        }
+    }
+
+    if all_errors.is_empty() {
+        Ok(deduplicated)
+    } else {
+        Err(all_errors)
+    }
+}
+
+pub struct WikiDocuments {
+    pub documents: Vec<(VirtualPath, Spanned<typst_html::HtmlDocument>)>,
+    pub introspector: Arc<WikiIntrospector>,
+}
+
+impl Output for WikiDocuments {
     fn target() -> Target {
         Target::Bundle
     }
@@ -117,7 +143,7 @@ impl Output for Wiki<Spanned<typst_html::HtmlDocument>> {
             styles,
         )?;
 
-        let mut entries: HashMap<VirtualPath, Spanned<HtmlDocument>> = HashMap::new();
+        let mut documents = Vec::new();
         let mut all_anchors = HashMap::new();
         let mut introspector = ElementIntrospectorBuilder::new();
 
@@ -138,23 +164,15 @@ impl Output for Wiki<Spanned<typst_html::HtmlDocument>> {
                 introspector.discover_elements(document.introspector().elements(), |_| {
                     document_elem.location()
                 });
-
-                match entries.entry(path.clone().into_inner()) {
-                    // TODO: build vector here and filter later
-                    Entry::Occupied(entry) => engine.sink.delayed_error(error!(
-                        content.span(), "path `{}` occurs multiple times in the bundle", path.as_ref().get_without_slash();
-                        hint: "{} paths must be unique in the bundle", content.func().name();
-                        hint[entry.get().span]: "path is already in use here";
-                    )),
-                    Entry::Vacant(entry) => {
-                        entry.insert(Spanned::new(document, document_elem.span()));
-                    }
-                }
+                documents.push((
+                    path.into_inner(),
+                    Spanned::new(document, document_elem.span()),
+                ));
             }
         }
 
-        Ok(Wiki {
-            entries,
+        Ok(WikiDocuments {
+            documents,
             introspector: Arc::new(WikiIntrospector {
                 elements: introspector.finalize(),
                 anchors: all_anchors,
@@ -358,7 +376,7 @@ impl<'a> Introspector for FocusedIntrospector<'a> {
             {
                 Ok(content)
             } else {
-                Err(error!(
+                Err(eco_format!(
                     "label `{}` does not exist in the document",
                     label.repr()
                 ))

@@ -279,7 +279,7 @@ where
         }),
         DiagnosticFormat::Human,
     )
-    .unwrap_or_else(|_| todo!());
+    .unwrap_or_else(|_| unreachable!());
 
     result
 }

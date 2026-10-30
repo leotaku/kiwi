@@ -7,9 +7,9 @@ edition = "2024"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "tokio"] }
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
-notify = "8.2.0"
+notify = "8.2.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
-tokio = { version = "1.53.2", features = ["macros", "net", "rt", "rt-multi-thread"] }
+tokio = { version = "1.54.1", features = ["macros", "net", "rt", "rt-multi-thread"] }
 typst = "0.15.1"
 typst-html = "0.15.1"
 typst-kit = { version = "0.15.1", features = ["system-files", "universe-packages", "embedded-fonts", "scan-fonts", "emit-diagnostics", "datetime"] }
